@@ -131,7 +131,7 @@ function BrowserVersions({ afterFetchData }) {
       fetchData={fetchData}
       afterFetchData={afterFetchData}
       getFilterInfo={getFilterInfo}
-      keyLabel="Browser version"
+      keyLabel="Browser Version"
       metrics={chooseMetrics()}
       renderIcon={renderIcon}
       detailsLinkProps={{
@@ -203,7 +203,7 @@ function OperatingSystems({ afterFetchData }) {
       afterFetchData={afterFetchData}
       getFilterInfo={getFilterInfo}
       renderIcon={renderIcon}
-      keyLabel="Operating system"
+      keyLabel="Betriebssystem"
       metrics={chooseMetrics()}
       detailsLinkProps={{
         path: operatingSystemsRoute.path,
@@ -249,7 +249,7 @@ function OperatingSystemVersions({ afterFetchData }) {
       renderIcon={renderIcon}
       afterFetchData={afterFetchData}
       getFilterInfo={getFilterInfo}
-      keyLabel="Operating System Version"
+      keyLabel="Betriebssystem Version"
       metrics={chooseMetrics()}
       detailsLinkProps={{
         path: operatingSystemVersionsRoute.path,
@@ -291,7 +291,7 @@ function ScreenSizes({ afterFetchData }) {
       fetchData={fetchData}
       afterFetchData={afterFetchData}
       getFilterInfo={getFilterInfo}
-      keyLabel="Screen size"
+      keyLabel="Bildschirm Größe"
       metrics={chooseMetrics()}
       renderIcon={renderIcon}
       detailsLinkProps={{

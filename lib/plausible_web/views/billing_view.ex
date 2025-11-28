@@ -3,7 +3,7 @@ defmodule PlausibleWeb.BillingView do
 
   def present_date(date) do
     Date.from_iso8601!(date)
-    |> Calendar.strftime("%-d %b %Y")
+    |> Calendar.strftime("%-d. %b %Y")
   end
 
   def present_currency("USD"), do: "$"

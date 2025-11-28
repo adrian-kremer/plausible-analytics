@@ -11,7 +11,7 @@ const is12HourClock = function () {
 const monthIntervalFormatter = {
   long(isoDate, options) {
     const formatted = this.short(isoDate, options)
-    return options.isBucketPartial ? `Partial of ${formatted}` : formatted
+    return options.isBucketPartial ? `Teilmonat von ${formatted}` : formatted
   },
   short(isoDate, _options) {
     return formatMonthYYYY(parseUTCDate(isoDate))
@@ -22,8 +22,8 @@ const weekIntervalFormatter = {
   long(isoDate, options) {
     const formatted = this.short(isoDate, options)
     return options.isBucketPartial
-      ? `Partial week of ${formatted}`
-      : `Week of ${formatted}`
+      ? `Teilwoche von ${formatted}`
+      : `Woche von ${formatted}`
   },
   short(isoDate, options) {
     return formatDayShort(parseUTCDate(isoDate), options.shouldShowYear)
@@ -32,7 +32,7 @@ const weekIntervalFormatter = {
 
 const dayIntervalFormatter = {
   long(isoDate, _options) {
-    return parseUTCDate(isoDate).format('ddd, D MMM')
+    return parseUTCDate(isoDate).format('ddd, D. MMM')
   },
   short(isoDate, options) {
     return formatDayShort(parseUTCDate(isoDate), options.shouldShowYear)
@@ -56,7 +56,7 @@ const minuteIntervalFormatter = {
   long(isoDate, options) {
     if (options.period == 'realtime') {
       const minutesAgo = Math.abs(isoDate)
-      return minutesAgo === 1 ? '1 minute ago' : minutesAgo + ' minutes ago'
+      return minutesAgo === 1 ? 'vor 1 Minute' : `vor ${minutesAgo} Minuten`
     } else {
       return this.short(isoDate, options)
     }

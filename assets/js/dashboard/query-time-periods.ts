@@ -48,10 +48,10 @@ export enum ComparisonMode {
 }
 
 export const COMPARISON_MODES = {
-  [ComparisonMode.off]: 'Disable comparison',
-  [ComparisonMode.previous_period]: 'Previous period',
-  [ComparisonMode.year_over_year]: 'Year over year',
-  [ComparisonMode.custom]: 'Custom period'
+  [ComparisonMode.off]: 'Vergleich deaktivieren',
+  [ComparisonMode.previous_period]: 'Vorheriger Zeitraum',
+  [ComparisonMode.year_over_year]: 'Jahr zu Jahr',
+  [ComparisonMode.custom]: 'Benutzerdefinierter Zeitraum'
 }
 
 export enum ComparisonMatchMode {
@@ -60,8 +60,8 @@ export enum ComparisonMatchMode {
 }
 
 export const COMPARISON_MATCH_MODE_LABELS = {
-  [ComparisonMatchMode.MatchDayOfWeek]: 'Match day of week',
-  [ComparisonMatchMode.MatchExactDate]: 'Match exact date'
+  [ComparisonMatchMode.MatchDayOfWeek]: 'Wochentag abgleichen',
+  [ComparisonMatchMode.MatchExactDate]: 'Genaues Datum abgleichen'
 }
 
 export const DEFAULT_COMPARISON_MODE = ComparisonMode.previous_period
@@ -482,7 +482,9 @@ export const getCompareLinkItem = ({
   onEvent: () => void
 }): LinkItem => [
   [
-    isComparisonEnabled(query.comparison) ? 'Vergleich deaktivieren' : 'Vergleichen',
+    isComparisonEnabled(query.comparison)
+      ? 'Vergleich deaktivieren'
+      : 'Vergleichen',
     'X'
   ],
   {

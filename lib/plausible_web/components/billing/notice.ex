@@ -268,7 +268,7 @@ defmodule PlausibleWeb.Components.Billing.Notice do
   defp subscription_cancelled_notice_body(assigns) do
     ~H"""
     <p>
-      You have access to your stats until <span class="font-semibold inline"><%= Calendar.strftime(@subscription.next_bill_date, "%b %-d, %Y") %></span>.
+      You have access to your stats until <span class="font-semibold inline"><%= Calendar.strftime(@subscription.next_bill_date, "%-d. %b %Y") %></span>.
       <.link
         class="underline inline-block"
         href={Routes.billing_path(PlausibleWeb.Endpoint, :choose_plan)}
