@@ -28,7 +28,7 @@ defmodule Plausible.Workers.SendEmailReport do
          true <- ok_to_send?(site) do
       date_range = date_range(site, interval)
       report_name = report_name(interval, date_range.first)
-      date_label = Calendar.strftime(date_range.last, "%-d %b %Y")
+      date_label = Calendar.strftime(date_range.last, "%-d. %b %Y")
       stats = stats(site, date_range)
 
       report
@@ -66,7 +66,7 @@ defmodule Plausible.Workers.SendEmailReport do
       "/sites/#{URI.encode_www_form(site.domain)}/#{interval}-report/unsubscribe?email=#{email}"
   end
 
-  defp report_name(@weekly, _), do: "Weekly"
+  defp report_name(@weekly, _), do: "Wöchentlich"
   defp report_name(@monthly, first), do: Calendar.strftime(first, "%B")
 
   defp stats(site, date_range) do

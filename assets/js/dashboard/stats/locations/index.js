@@ -47,7 +47,7 @@ function Countries({ query, site, onClick, afterFetchData }) {
       afterFetchData={afterFetchData}
       getFilterInfo={getFilterInfo}
       onClick={onClick}
-      keyLabel="Country"
+      keyLabel="Land"
       metrics={chooseMetrics()}
       detailsLinkProps={{
         path: countriesRoute.path,
@@ -127,7 +127,7 @@ function Cities({ query, site, afterFetchData }) {
       fetchData={fetchData}
       afterFetchData={afterFetchData}
       getFilterInfo={getFilterInfo}
-      keyLabel="City"
+      keyLabel="Stadt"
       metrics={chooseMetrics()}
       detailsLinkProps={{ path: citiesRoute.path, search: (search) => search }}
       renderIcon={renderIcon}

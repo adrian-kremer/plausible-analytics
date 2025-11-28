@@ -33,7 +33,7 @@ function EntryPages({ afterFetchData }) {
   function chooseMetrics() {
     return [
       metrics.createVisitors({
-        defaultLabel: 'Unique Entrances',
+        defaultLabel: 'Eindeutige Eingänge',
         width: 'w-36',
         meta: { plot: true }
       }),
@@ -46,7 +46,7 @@ function EntryPages({ afterFetchData }) {
       fetchData={fetchData}
       afterFetchData={afterFetchData}
       getFilterInfo={getFilterInfo}
-      keyLabel="Entry page"
+      keyLabel="Eingangsseite"
       metrics={chooseMetrics()}
       detailsLinkProps={{
         path: entryPagesRoute.path,
@@ -79,7 +79,7 @@ function ExitPages({ afterFetchData }) {
   function chooseMetrics() {
     return [
       metrics.createVisitors({
-        defaultLabel: 'Unique Exits',
+        defaultLabel: 'Eindeutige Ausstiege',
         width: 'w-36',
         meta: { plot: true }
       }),
@@ -92,7 +92,7 @@ function ExitPages({ afterFetchData }) {
       fetchData={fetchData}
       afterFetchData={afterFetchData}
       getFilterInfo={getFilterInfo}
-      keyLabel="Exit page"
+      keyLabel="Ausgangsseite"
       metrics={chooseMetrics()}
       detailsLinkProps={{
         path: exitPagesRoute.path,
@@ -134,7 +134,7 @@ function TopPages({ afterFetchData }) {
       fetchData={fetchData}
       afterFetchData={afterFetchData}
       getFilterInfo={getFilterInfo}
-      keyLabel="Page"
+      keyLabel="Seite"
       metrics={chooseMetrics()}
       detailsLinkProps={{
         path: topPagesRoute.path,

@@ -176,10 +176,10 @@ defmodule Plausible.Stats.Breakdown do
   end
 
   defp strfdate(date, true = _include_year) do
-    Calendar.strftime(date, "%-d %b %Y")
+    Calendar.strftime(date, "%-d. %b %Y")
   end
 
   defp strfdate(date, false = _include_year) do
-    Calendar.strftime(date, "%-d %b")
+    Calendar.strftime(date, "%-d. %b")
   end
 end

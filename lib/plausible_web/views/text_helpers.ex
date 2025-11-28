@@ -42,7 +42,7 @@ defmodule PlausibleWeb.TextHelpers do
   end
 
   def format_date(date) do
-    Calendar.strftime(date, "%b %-d, %Y")
+    Calendar.strftime(date, "%-d. %b %Y")
   end
 
   def number_format(number) when is_integer(number) do

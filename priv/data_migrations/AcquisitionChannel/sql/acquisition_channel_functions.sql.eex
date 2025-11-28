@@ -208,23 +208,23 @@ CREATE OR REPLACE FUNCTION acquisition_channel <%= @on_cluster_statement %> AS
 CREATE OR REPLACE FUNCTION acquisition_channel_lowered <%= @on_cluster_statement %> AS
 (referrer_source, utm_medium, utm_campaign, utm_source, click_id_param) ->
     multiIf(
-        acquisition_channel_cross_network(utm_campaign), 'Cross-network',
+        acquisition_channel_cross_network(utm_campaign), 'Netzwerkübergreifend',
         acquisition_channel_display(utm_medium), 'Display',
-        acquisition_channel_paid_shopping(referrer_source, utm_medium, utm_campaign), 'Paid Shopping',
-        acquisition_channel_paid_search(referrer_source, utm_medium, utm_source, click_id_param), 'Paid Search',
-        acquisition_channel_paid_social(referrer_source, utm_medium, utm_source), 'Paid Social',
-        acquisition_channel_paid_video(referrer_source, utm_medium, utm_source), 'Paid Video',
-        acquisition_channel_paid_medium(utm_medium), 'Paid Other',
-        acquisition_channel_organic_shopping(referrer_source, utm_campaign), 'Organic Shopping',
-        acquisition_channel_organic_social(referrer_source, utm_medium), 'Organic Social',
-        acquisition_channel_organic_video(referrer_source, utm_medium), 'Organic Video',
-        acquisition_channel_has_category_search(referrer_source), 'Organic Search',
-        acquisition_channel_email(referrer_source, utm_source, utm_medium), 'Email',
+        acquisition_channel_paid_shopping(referrer_source, utm_medium, utm_campaign), 'Bezahlt Shopping',
+        acquisition_channel_paid_search(referrer_source, utm_medium, utm_source, click_id_param), 'Bezahlte Suche',
+        acquisition_channel_paid_social(referrer_source, utm_medium, utm_source), 'Bezahlt soziale Medien',
+        acquisition_channel_paid_video(referrer_source, utm_medium, utm_source), 'Bezahlt Videos',
+        acquisition_channel_paid_medium(utm_medium), 'Bezahlt (Sonstige)',
+        acquisition_channel_organic_shopping(referrer_source, utm_campaign), 'Organisch Shopping',
+        acquisition_channel_organic_social(referrer_source, utm_medium), 'Organisch soziale Medien',
+        acquisition_channel_organic_video(referrer_source, utm_medium), 'Organisch Videos',
+        acquisition_channel_has_category_search(referrer_source), 'Organische Suche',
+        acquisition_channel_email(referrer_source, utm_source, utm_medium), 'E-Mail',
         acquisition_channel_affiliates(utm_medium), 'Affiliates',
         acquisition_channel_audio(utm_medium), 'Audio',
         acquisition_channel_sms(utm_source), 'SMS',
         acquisition_channel_sms(utm_medium), 'SMS',
-        acquisition_channel_mobile_push_notifications(utm_medium, referrer_source), 'Mobile Push Notifications',
-        acquisition_channel_referral(utm_medium, referrer_source), 'Referral',
-        'Direct'
+        acquisition_channel_mobile_push_notifications(utm_medium, referrer_source), 'Mobile Push-Benachrichtigungen',
+        acquisition_channel_referral(utm_medium, referrer_source), 'Refferral',
+        'Direkt'
     );

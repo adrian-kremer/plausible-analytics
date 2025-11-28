@@ -1,7 +1,9 @@
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
+import 'dayjs/locale/de'
 
 dayjs.extend(utc)
+dayjs.locale('de')
 
 export function utcNow() {
   return dayjs()
@@ -25,7 +27,7 @@ export function formatMonthYYYY(date) {
 }
 
 export function formatYear(date) {
-  return `Year of ${date.year()}`
+  return `Jahr ${date.year()}`
 }
 
 export function formatYearShort(date) {
@@ -34,17 +36,17 @@ export function formatYearShort(date) {
 
 export function formatDay(date) {
   if (date.year() !== dayjs().year()) {
-    return date.format('ddd, DD MMM YYYY')
+    return date.format('ddd, DD. MMM YYYY')
   } else {
-    return date.format('ddd, DD MMM')
+    return date.format('ddd, DD. MMM')
   }
 }
 
 export function formatDayShort(date, includeYear = false) {
   if (includeYear) {
-    return date.format('D MMM YY')
+    return date.format('D. MMM YY')
   } else {
-    return date.format('D MMM')
+    return date.format('D. MMM')
   }
 }
 

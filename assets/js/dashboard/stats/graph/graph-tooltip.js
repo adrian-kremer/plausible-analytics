@@ -189,7 +189,7 @@ export default function GraphTooltip(graphData, metric, query, theme) {
             <>
               <hr className="border-gray-600 dark:border-gray-800 my-1" />
               <span className="text-gray-300 dark:text-gray-400 text-xs">
-                Click to view {graphData.interval}
+                Klicke um {graphData.interval} anzuschauen
               </span>
             </>
           )}
