@@ -19,7 +19,7 @@ defmodule PlausibleWeb.Email do
     |> render("activation_email.html", user: user, code: code)
   end
 
-  def welcome_email(user) do
+  def welcome_email(_user) do
     # Diese E-Mail wurde deaktiviert
     nil
     
@@ -30,7 +30,7 @@ defmodule PlausibleWeb.Email do
     # |> render("welcome_email.html", user: user)
   end
 
-  def create_site_email(user) do
+  def create_site_email(_user) do
     # Diese E-Mail wurde deaktiviert
     nil
     
@@ -41,7 +41,7 @@ defmodule PlausibleWeb.Email do
     # |> render("create_site_email.html", user: user)
   end
 
-  def site_setup_help(user, team, site) do
+  def site_setup_help(_user, _team, _site) do
     # Diese E-Mail wurde deaktiviert
     nil
     
@@ -56,7 +56,7 @@ defmodule PlausibleWeb.Email do
     # )
   end
 
-  def site_setup_success(user, site) do
+  def site_setup_success(_user, _site) do
     # Diese E-Mail wurde deaktiviert
     nil
     
@@ -70,7 +70,7 @@ defmodule PlausibleWeb.Email do
     # )
   end
 
-  def check_stats_email(user) do
+  def check_stats_email(_user) do
     # Diese E-Mail wurde deaktiviert
     nil
     
@@ -105,7 +105,7 @@ defmodule PlausibleWeb.Email do
     |> render("two_factor_disabled_email.html", user: user)
   end
 
-  def trial_one_week_reminder(user, team) do
+  def trial_one_week_reminder(_user, _team) do
     # Diese E-Mail wurde deaktiviert
     nil
     
@@ -116,7 +116,7 @@ defmodule PlausibleWeb.Email do
     # |> render("trial_one_week_reminder.html", user: user, team: team)
   end
 
-  def trial_ending_tomorrow_email(user, team, usage, suggested_volume) do
+  def trial_ending_tomorrow_email(_user, _team, _usage, _suggested_volume) do
     # Diese E-Mail wurde deaktiviert
     nil
     
@@ -133,7 +133,7 @@ defmodule PlausibleWeb.Email do
     # )
   end
 
-  def trial_ending_today_email(user, team, usage, suggested_volume) do
+  def trial_ending_today_email(_user, _team, _usage, _suggested_volume) do
     # Diese E-Mail wurde deaktiviert
     nil
     
@@ -150,7 +150,7 @@ defmodule PlausibleWeb.Email do
     # )
   end
 
-  def trial_over_email(user, team) do
+  def trial_over_email(_user, _team) do
     # Diese E-Mail wurde deaktiviert
     nil
     
@@ -200,7 +200,7 @@ defmodule PlausibleWeb.Email do
     })
   end
 
-  def over_limit_email(user, team, usage, suggested_volume) do
+  def over_limit_email(_user, _team, _usage, _suggested_volume) do
     # Diese E-Mail wurde deaktiviert
     nil
     
@@ -216,7 +216,7 @@ defmodule PlausibleWeb.Email do
     # })
   end
 
-  def enterprise_over_limit_internal_email(user, pageview_usage, site_usage, site_allowance) do
+  def enterprise_over_limit_internal_email(_user, _pageview_usage, _site_usage, _site_allowance) do
     # Diese E-Mail wurde deaktiviert
     nil
     
@@ -232,7 +232,7 @@ defmodule PlausibleWeb.Email do
     # })
   end
 
-  def dashboard_locked(user, team, usage, suggested_volume) do
+  def dashboard_locked(_user, _team, _usage, _suggested_volume) do
     # Diese E-Mail wurde deaktiviert
     nil
     
@@ -248,7 +248,7 @@ defmodule PlausibleWeb.Email do
     # })
   end
 
-  def yearly_renewal_notification(team, owner) do
+  def yearly_renewal_notification(_team, _owner) do
     # Diese E-Mail wurde deaktiviert
     nil
     
@@ -267,7 +267,7 @@ defmodule PlausibleWeb.Email do
     # })
   end
 
-  def yearly_expiration_notification(team, owner) do
+  def yearly_expiration_notification(_team, _owner) do
     # Diese E-Mail wurde deaktiviert
     nil
     
@@ -290,7 +290,7 @@ defmodule PlausibleWeb.Email do
     # })
   end
 
-  def cancellation_email(user) do
+  def cancellation_email(_user) do
     # Diese E-Mail wurde deaktiviert
     nil
     
@@ -592,7 +592,7 @@ defmodule PlausibleWeb.Email do
     })
   end
 
-  def approaching_accept_traffic_until(notification) do
+  def approaching_accept_traffic_until(_notification) do
     # Diese E-Mail wurde deaktiviert
     nil
     
@@ -607,7 +607,7 @@ defmodule PlausibleWeb.Email do
     # )
   end
 
-  def approaching_accept_traffic_until_tomorrow(notification) do
+  def approaching_accept_traffic_until_tomorrow(_notification) do
     # Diese E-Mail wurde deaktiviert
     nil
     
