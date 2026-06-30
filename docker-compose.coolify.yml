@@ -75,30 +75,12 @@ services:
       # account, then change to "true" (or "invite_only") in Coolify afterwards.
       - DISABLE_REGISTRATION=${DISABLE_REGISTRATION:-false}
       - TMPDIR=/var/lib/plausible/tmp
-      # --- optional: email (configure in Coolify's Environment Variables tab) ---
-      - ENABLE_EMAIL_VERIFICATION
-      - MAILER_ADAPTER
-      - MAILER_EMAIL
-      - MAILER_NAME
-      - SMTP_HOST_ADDR
-      - SMTP_HOST_PORT
-      - SMTP_USER_NAME
-      - SMTP_USER_PWD
-      - SMTP_HOST_SSL_ENABLED
-      - POSTMARK_API_KEY
-      - MAILGUN_API_KEY
-      - MAILGUN_DOMAIN
-      - MAILGUN_BASE_URI
-      - MANDRILL_API_KEY
-      - SENDGRID_API_KEY
-      # --- optional: geolocation ---
-      - IP_GEOLOCATION_DB
-      - GEONAMES_SOURCE_FILE
-      - MAXMIND_LICENSE_KEY
-      - MAXMIND_EDITION
-      # --- optional: Google integration ---
-      - GOOGLE_CLIENT_ID
-      - GOOGLE_CLIENT_SECRET
+      # Optional features (email/SMTP, geolocation, Google) are intentionally NOT
+      # listed as bare passthrough vars: Coolify would inject them as empty strings
+      # ("") which breaks boolean/URL parsing at boot. To enable them, add the
+      # specific variables WITH real values in Coolify's "Environment Variables"
+      # tab, e.g. ENABLE_EMAIL_VERIFICATION=true, MAILER_ADAPTER=Bamboo.SMTPAdapter,
+      # SMTP_HOST_ADDR=..., SMTP_HOST_SSL_ENABLED=true, GOOGLE_CLIENT_ID=..., etc.
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 -O - http://127.0.0.1:8000/api/health || exit 1"]
       start_period: 2m
