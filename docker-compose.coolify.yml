@@ -60,9 +60,12 @@ services:
       - SERVICE_FQDN_PLAUSIBLE_8000
       # --- required ---
       - BASE_URL=$SERVICE_URL_PLAUSIBLE
-      # 64+ byte secret, auto-generated and persisted by Coolify
-      - SECRET_KEY_BASE=${SERVICE_BASE64_64_SECRETKEY}
-      # exactly 32 bytes (base64-encoded), required for 2FA / TOTP
+      # MIGRATION: set SECRET_KEY_BASE in Coolify's "Environment Variables" tab to
+      # the SAME value as the OLD server (keeps existing sessions valid). For a
+      # brand-new install instead, generate it with: openssl rand -base64 64
+      - SECRET_KEY_BASE
+      # No 2FA users exist on the old server, so there is no encrypted TOTP data to
+      # preserve -> Coolify generates a fresh 32-byte key (enables 2FA going forward).
       - TOTP_VAULT_KEY=${SERVICE_REALBASE64_32_TOTP}
       # --- databases ---
       - DATABASE_URL=postgres://postgres:${SERVICE_PASSWORD_POSTGRES}@plausible_db:5432/plausible_db
