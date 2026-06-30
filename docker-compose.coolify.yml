@@ -1,0 +1,110 @@
+# Coolify deployment for this Plausible Analytics fork.
+# In Coolify: New Resource -> Docker Compose (Build Pack: Compose from Git)
+# and set "Docker Compose Location" to: /docker-compose.coolify.yml
+#
+# Secrets, passwords and the public URL are generated automatically by Coolify
+# via the SERVICE_* "magic" environment variables on the first deploy and then
+# kept stable across redeploys.
+services:
+  plausible_db:
+    image: postgres:16-alpine
+    restart: always
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_PASSWORD=${SERVICE_PASSWORD_POSTGRES}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      start_period: 1m
+
+  plausible_events_db:
+    image: clickhouse/clickhouse-server:24.12-alpine
+    restart: always
+    volumes:
+      - event-data:/var/lib/clickhouse
+      - event-logs:/var/log/clickhouse-server
+      - ./clickhouse/logs.xml:/etc/clickhouse-server/config.d/logs.xml:ro
+      - ./clickhouse/ipv4-only.xml:/etc/clickhouse-server/config.d/ipv4-only.xml:ro
+      - ./clickhouse/low-resources.xml:/etc/clickhouse-server/config.d/low-resources.xml:ro
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    environment:
+      - CLICKHOUSE_SKIP_USER_SETUP=1
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 -O - http://127.0.0.1:8123/ping || exit 1"]
+      start_period: 1m
+
+  plausible:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - MIX_ENV=ce
+    restart: always
+    command: sh -c "/entrypoint.sh db createdb && /entrypoint.sh db migrate && /entrypoint.sh run"
+    depends_on:
+      plausible_db:
+        condition: service_healthy
+      plausible_events_db:
+        condition: service_healthy
+    volumes:
+      - plausible-data:/var/lib/plausible
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    environment:
+      # --- Coolify routing: exposes the container's port 8000 on your domain ---
+      - SERVICE_FQDN_PLAUSIBLE_8000
+      # --- required ---
+      - BASE_URL=$SERVICE_URL_PLAUSIBLE
+      # 64+ byte secret, auto-generated and persisted by Coolify
+      - SECRET_KEY_BASE=${SERVICE_BASE64_64_SECRETKEY}
+      # exactly 32 bytes (base64-encoded), required for 2FA / TOTP
+      - TOTP_VAULT_KEY=${SERVICE_REALBASE64_32_TOTP}
+      # --- databases ---
+      - DATABASE_URL=postgres://postgres:${SERVICE_PASSWORD_POSTGRES}@plausible_db:5432/plausible_db
+      - CLICKHOUSE_DATABASE_URL=http://plausible_events_db:8123/plausible_events_db
+      # --- registration ---
+      # Set to "false" for the very first deploy so you can create the first
+      # account, then change to "true" (or "invite_only") in Coolify afterwards.
+      - DISABLE_REGISTRATION=${DISABLE_REGISTRATION:-false}
+      - TMPDIR=/var/lib/plausible/tmp
+      # --- optional: email (configure in Coolify's Environment Variables tab) ---
+      - ENABLE_EMAIL_VERIFICATION
+      - MAILER_ADAPTER
+      - MAILER_EMAIL
+      - MAILER_NAME
+      - SMTP_HOST_ADDR
+      - SMTP_HOST_PORT
+      - SMTP_USER_NAME
+      - SMTP_USER_PWD
+      - SMTP_HOST_SSL_ENABLED
+      - POSTMARK_API_KEY
+      - MAILGUN_API_KEY
+      - MAILGUN_DOMAIN
+      - MAILGUN_BASE_URI
+      - MANDRILL_API_KEY
+      - SENDGRID_API_KEY
+      # --- optional: geolocation ---
+      - IP_GEOLOCATION_DB
+      - GEONAMES_SOURCE_FILE
+      - MAXMIND_LICENSE_KEY
+      - MAXMIND_EDITION
+      # --- optional: Google integration ---
+      - GOOGLE_CLIENT_ID
+      - GOOGLE_CLIENT_SECRET
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 -O - http://127.0.0.1:8000/api/health || exit 1"]
+      start_period: 2m
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  db-data:
+  event-data:
+  event-logs:
+  plausible-data:
