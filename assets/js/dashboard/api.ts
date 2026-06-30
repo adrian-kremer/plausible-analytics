@@ -1,16 +1,70 @@
-import { DashboardQuery } from './query'
+import { Metric } from './stats/metrics'
+import { DashboardState } from './dashboard-state'
+import { PlausibleSite } from './site-context'
+import { StatsQuery } from './stats-query'
 import { formatISO } from './util/date'
 import { serializeApiFilters } from './util/filters'
+import * as url from './util/url'
+import { MainGraphResponse } from './stats/graph/fetch-main-graph'
+import { CsvExportRequestBody } from './stats/csv-export/csv-export-body'
+import { maybeReloadForApiVersion } from './util/url-search-params'
 
 let abortController = new AbortController()
 let SHARED_LINK_AUTH: null | string = null
 
+export type RevenueMetricValue = {
+  short: string
+  value: number
+  long: string
+  currency: string
+}
+
+export type MetricValue = null | number | RevenueMetricValue
+
+export type QueryResultQuery = {
+  metrics: Metric[]
+  dimensions: string[]
+  date_range: [string, string]
+  comparison_date_range?: [string, string] | null
+}
+
+export type QueryResultMeta = {
+  metric_warnings?: Record<string, Record<string, string>>
+  imports_included?: boolean
+  imports_skip_reason?: string
+}
+
+export type QueryResultRow = {
+  metrics: Array<MetricValue>
+  dimensions: Array<string>
+  comparison?: { metrics: Array<number>; change: Array<number> }
+}
+
+// Added client-side in the queryFn before storing to TanStack cache.
+// Needed to make sure that the time/metric labels we're constructing
+// in stats reports are in sync with the dashboardState that was used
+// to make that query. Otherwise, relying on current dashboardState
+// while rendering previous (placeholder) data, it'd be out of sync.
+export type ExtraContext = {
+  isRealtime: boolean
+  hasConversionGoalFilter: boolean
+}
+
+export type QueryApiResponse = {
+  query: QueryResultQuery
+  meta: QueryResultMeta
+  results: QueryResultRow[]
+  extraContext: ExtraContext
+}
+
 export class ApiError extends Error {
   payload: unknown
-  constructor(message: string, payload: unknown) {
+  status: number
+  constructor(message: string, payload: unknown, status: number) {
     super(message)
     this.name = 'ApiError'
     this.payload = payload
+    this.status = status
   }
 }
 
@@ -32,39 +86,46 @@ export function cancelAll() {
   abortController = new AbortController()
 }
 
-export function queryToSearchParams(
-  query: DashboardQuery,
+export function dashboardStateToSearchParams(
+  dashboardState: DashboardState,
   extraQuery: unknown[] = []
 ): string {
+  return serializeUrlParams(dashboardStateToParams(dashboardState, extraQuery))
+}
+
+export function dashboardStateToParams(
+  dashboardState: DashboardState,
+  extraQuery: unknown[] = []
+): Record<string, string> {
   const queryObj: Record<string, string> = {}
-  if (query.period) {
-    queryObj.period = query.period
+  if (dashboardState.period) {
+    queryObj.period = dashboardState.period
   }
-  if (query.date) {
-    queryObj.date = formatISO(query.date)
+  if (dashboardState.date) {
+    queryObj.date = formatISO(dashboardState.date)
   }
-  if (query.from) {
-    queryObj.from = formatISO(query.from)
+  if (dashboardState.from) {
+    queryObj.from = formatISO(dashboardState.from)
   }
-  if (query.to) {
-    queryObj.to = formatISO(query.to)
+  if (dashboardState.to) {
+    queryObj.to = formatISO(dashboardState.to)
   }
-  if (query.filters) {
-    queryObj.filters = serializeApiFilters(query.filters)
+  if (dashboardState.filters) {
+    queryObj.filters = serializeApiFilters(dashboardState.filters)
   }
-  if (query.with_imported) {
-    queryObj.with_imported = String(query.with_imported)
+  if (dashboardState.with_imported) {
+    queryObj.with_imported = String(dashboardState.with_imported)
   }
 
-  if (query.comparison) {
-    queryObj.comparison = query.comparison
-    queryObj.compare_from = query.compare_from
-      ? formatISO(query.compare_from)
+  if (dashboardState.comparison) {
+    queryObj.comparison = dashboardState.comparison
+    queryObj.compare_from = dashboardState.compare_from
+      ? formatISO(dashboardState.compare_from)
       : undefined
-    queryObj.compare_to = query.compare_to
-      ? formatISO(query.compare_to)
+    queryObj.compare_to = dashboardState.compare_to
+      ? formatISO(dashboardState.compare_to)
       : undefined
-    queryObj.match_day_of_week = String(query.match_day_of_week)
+    queryObj.match_day_of_week = String(dashboardState.match_day_of_week)
   }
 
   const sharedLinkParams = getSharedLinkSearchParams()
@@ -74,38 +135,110 @@ export function queryToSearchParams(
 
   Object.assign(queryObj, ...extraQuery)
 
-  return serializeUrlParams(queryObj)
+  return queryObj
 }
 
 function getHeaders(): Record<string, string> {
   return SHARED_LINK_AUTH ? { 'X-Shared-Link-Auth': SHARED_LINK_AUTH } : {}
 }
 
-async function handleApiResponse(response: Response) {
-  const payload = await response.json()
+async function throwApiErrorIfNotOk(response: Response) {
   if (!response.ok) {
-    throw new ApiError(payload.error, payload)
+    const payload = await response.json()
+    throw new ApiError(payload.error, payload, response.status)
+  }
+}
+
+async function handleApiResponse(
+  response: Response,
+  opts: Record<'idempotent', boolean> = { idempotent: true }
+) {
+  if (opts.idempotent) {
+    maybeReloadForApiVersion(window.location, response.headers)
   }
 
-  return payload
+  await throwApiErrorIfNotOk(response)
+  return response.json()
 }
 
 function getSharedLinkSearchParams(): Record<string, string> {
   return SHARED_LINK_AUTH ? { auth: SHARED_LINK_AUTH } : {}
 }
 
+export async function stats<
+  TResponse extends QueryApiResponse | MainGraphResponse
+>(site: PlausibleSite, statsQuery: StatsQuery) {
+  const sharedLinkParams = getSharedLinkSearchParams()
+  const queryString = sharedLinkParams.auth
+    ? new URLSearchParams(sharedLinkParams).toString()
+    : ''
+  const path = url.apiPath(site, '/query')
+  const response = await fetch(queryString ? `${path}?${queryString}` : path, {
+    method: 'POST',
+    signal: abortController.signal,
+    headers: {
+      ...getHeaders(),
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    body: JSON.stringify(statsQuery)
+  })
+
+  return (await handleApiResponse(response)) as TResponse
+}
+
+export async function csvExport(
+  site: PlausibleSite,
+  body: CsvExportRequestBody
+): Promise<Blob> {
+  const sharedLinkParams = getSharedLinkSearchParams()
+  const queryString = sharedLinkParams.auth
+    ? new URLSearchParams(sharedLinkParams).toString()
+    : ''
+  const path = url.apiPath(site, '/export')
+  const response = await fetch(queryString ? `${path}?${queryString}` : path, {
+    method: 'POST',
+    headers: { ...getHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  })
+  await throwApiErrorIfNotOk(response)
+  return response.blob()
+}
+
 export async function get(
   url: string,
-  query?: DashboardQuery,
+  dashboardState?: DashboardState,
   ...extraQueryParams: unknown[]
 ) {
-  const queryString = query
-    ? queryToSearchParams(query, [...extraQueryParams])
+  const queryString = dashboardState
+    ? dashboardStateToSearchParams(dashboardState, [...extraQueryParams])
     : serializeUrlParams(getSharedLinkSearchParams())
 
   const response = await fetch(queryString ? `${url}?${queryString}` : url, {
     signal: abortController.signal,
     headers: { ...getHeaders(), Accept: 'application/json' }
+  })
+
+  return handleApiResponse(response)
+}
+
+export async function post(
+  url: string,
+  dashboardState: DashboardState,
+  ...extraBodyParams: unknown[]
+) {
+  const queryString = serializeUrlParams(getSharedLinkSearchParams())
+  const response = await fetch(queryString ? `${url}?${queryString}` : url, {
+    method: 'POST',
+    signal: abortController.signal,
+    headers: {
+      ...getHeaders(),
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    body: JSON.stringify(
+      dashboardStateToParams(dashboardState, [...extraBodyParams])
+    )
   })
 
   return handleApiResponse(response)
@@ -137,5 +270,5 @@ export const mutation = async <
     body: fetchOptions.body,
     signal: abortController.signal
   })
-  return handleApiResponse(response)
+  return handleApiResponse(response, { idempotent: false })
 }

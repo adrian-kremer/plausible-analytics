@@ -10,6 +10,22 @@ defmodule PlausibleWeb.Live.SharedLinkSettingsTest do
       {:ok, session: %{"site_id" => site.id, "domain" => site.domain}}
     end
 
+    test "guest editors should be able to access shared link settings", %{
+      site: site,
+      conn: conn,
+      session: session
+    } do
+      insert(:shared_link, site: site, name: "Link 1")
+      guest_user = new_user()
+      add_guest(site, user: guest_user, role: :editor)
+
+      {:ok, conn: conn} = log_in(%{user: guest_user, conn: conn})
+      lv = get_liveview(conn, session)
+      lock_notice = render(lv) |> text_of_element("#lock-notice")
+
+      refute lock_notice =~ "upgrade your subscription"
+    end
+
     test "allows shared link deletion", %{conn: conn, site: site, session: session} do
       link1 = insert(:shared_link, site: site, name: "Link 1")
       link2 = insert(:shared_link, site: site, name: "Link 2")
@@ -100,6 +116,27 @@ defmodule PlausibleWeb.Live.SharedLinkSettingsTest do
       html = render(lv)
 
       assert html =~ "Create your first shared link"
+    end
+
+    test "cannot edit shared link from another site by passing its slug as a param", %{
+      conn: conn,
+      site: site,
+      session: session
+    } do
+      _own_link = insert(:shared_link, site: site, name: "Own Link")
+      victim_site = insert(:site)
+      victim_link = insert(:shared_link, site: victim_site, name: "Victim Link")
+
+      lv = get_liveview(conn, session)
+
+      html = render_click(lv, "edit-shared-link", %{"slug" => victim_link.slug})
+
+      refute html =~ "Edit shared link"
+      assert html =~ "Could not find Shared Link"
+
+      # Verify the victim's shared link is unchanged in the database
+      reloaded = Plausible.Repo.reload!(victim_link)
+      assert reloaded.name == "Victim Link"
     end
   end
 

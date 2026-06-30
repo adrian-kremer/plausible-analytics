@@ -5,12 +5,13 @@ import {
 } from '../util/filters'
 import { PlausibleSite, useSiteContext } from '../site-context'
 import { filterRoute } from '../router'
-import { MagnifyingGlassIcon } from '@heroicons/react/24/outline'
+import { FilterIcon } from '../components/icons'
 import { Popover, Transition } from '@headlessui/react'
 import { popover, BlurMenuButtonOnEscape } from '../components/popover'
 import classNames from 'classnames'
 import { AppNavigationLink } from '../navigation/use-app-navigate'
 import { SearchableSegmentsSection } from './segments/searchable-segments-section'
+import { useSegmentsContext } from '../filtering/segments-context'
 
 export function getFilterListItems({
   propsAvailable
@@ -49,6 +50,7 @@ const FilterMenuItems = ({ closeDropdown }: { closeDropdown: () => void }) => {
   const columns = useMemo(() => getFilterListItems(site), [site])
   const buttonRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+  const { limitedToSegment } = useSegmentsContext()
 
   return (
     <>
@@ -57,11 +59,10 @@ const FilterMenuItems = ({ closeDropdown }: { closeDropdown: () => void }) => {
         ref={buttonRef}
         className={classNames(
           popover.toggleButton.classNames.rounded,
-          popover.toggleButton.classNames.ghost,
-          'justify-center gap-1 px-3'
+          popover.toggleButton.classNames.ghost
         )}
       >
-        <MagnifyingGlassIcon className="block h-4 w-4" />
+        <FilterIcon className="block size-3.5" />
         <span className={popover.toggleButton.classNames.truncatedText}>
           Filter
         </span>
@@ -107,10 +108,12 @@ const FilterMenuItems = ({ closeDropdown }: { closeDropdown: () => void }) => {
               </div>
             ))}
           </div>
-          <SearchableSegmentsSection
-            closeList={closeDropdown}
-            tooltipContainerRef={panelRef}
-          />
+          {limitedToSegment === null && (
+            <SearchableSegmentsSection
+              closeList={closeDropdown}
+              tooltipContainerRef={panelRef}
+            />
+          )}
         </Popover.Panel>
       </Transition>
     </>

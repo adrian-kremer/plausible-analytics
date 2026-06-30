@@ -1,5 +1,5 @@
 export class MockAPI {
-  private mocked: Map<string, () => Promise<Response>>
+  private mocked: Map<string, jest.Mock>
   private fetch: jest.Mock
   private originalFetch: null | unknown = null
 
@@ -10,30 +10,54 @@ export class MockAPI {
 
   private setHandler(
     method: string,
-    url: string,
-    handler: () => Promise<Response>
+    urlWithoutQueryString: string,
+    handler: jest.Mock
   ) {
-    this.mocked.set([method.toLowerCase(), url].join(' '), handler)
+    this.mocked.set(
+      [method.toLowerCase(), urlWithoutQueryString].join(' '),
+      handler
+    )
   }
 
-  public get(url: string, response: (() => Promise<Response>) | unknown) {
-    const handler =
-      typeof response === 'function'
-        ? (response as () => Promise<Response>)
+  // sets get handler
+  public get(
+    urlWithoutQueryString: string,
+    responseHandler: typeof fetch | Record<string, unknown> | number | null
+  ): jest.Mock {
+    return this.register('get', urlWithoutQueryString, responseHandler)
+  }
+
+  // sets post handler
+  public post(
+    urlWithoutQueryString: string,
+    responseHandler: typeof fetch | Record<string, unknown>
+  ): jest.Mock {
+    return this.register('post', urlWithoutQueryString, responseHandler)
+  }
+
+  private register(
+    method: string,
+    urlWithoutQueryString: string,
+    responseHandler: typeof fetch | Record<string, unknown> | number | null
+  ): jest.Mock {
+    const handler: typeof fetch =
+      typeof responseHandler === 'function'
+        ? responseHandler
         : () =>
-            new Promise<Response>((resolve) =>
+            new Promise((resolve) =>
               resolve({
                 status: 200,
                 ok: true,
-                json: async () => response
+                json: async () => responseHandler
               } as Response)
             )
-    this.setHandler('get', url, handler)
-    return this
+    const jestWrappedHandler = jest.fn(handler)
+    this.setHandler(method, urlWithoutQueryString, jestWrappedHandler)
+    return jestWrappedHandler
   }
 
-  private getHandler(method: string, url: string) {
-    return this.mocked.get([method, url].join(' '))
+  private getHandler(method: string, urlWithoutQueryString: string) {
+    return this.mocked.get([method, urlWithoutQueryString].join(' '))
   }
 
   public clear() {
@@ -47,15 +71,15 @@ export class MockAPI {
       if (typeof input !== 'string') {
         throw new Error(`Unmocked request ${input.toString()}`)
       }
-      const method = init?.method ?? 'get'
-
-      const handler = this.getHandler(method, input)
+      const method = (init?.method ?? 'get').toLowerCase()
+      const urlWithoutQueryString = input.split('?')[0]
+      const handler = this.getHandler(method, urlWithoutQueryString)
       if (!handler) {
         throw new Error(
           `Unmocked request ${method.toString()} ${input.toString()}`
         )
       }
-      return handler()
+      return handler(input, init)
     }
 
     global.fetch = this.fetch.mockImplementation(mockFetch)

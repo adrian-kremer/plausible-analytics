@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { ReactNode } from 'react'
 import {
   AppNavigationLink,
   AppNavigationLinkProps
@@ -6,13 +6,14 @@ import {
 import classNames from 'classnames'
 import { cleanLabels, replaceFilterByPrefix } from '../util/filters'
 import { plainFilterText } from '../util/filter-text'
-import { useQueryContext } from '../query-context'
-import { Filter, FilterClauseLabels } from '../query'
+import { useDashboardStateContext } from '../dashboard-state-context'
+import { Filter, FilterClauseLabels } from '../dashboard-state'
 
 export type FilterInfo = {
   prefix: string
   filter: Filter
   labels?: FilterClauseLabels
+  extraFilters?: Array<{ prefix: string; filter: Filter }>
 }
 
 export function DrilldownLink({
@@ -20,25 +21,45 @@ export function DrilldownLink({
   filterInfo,
   onClick,
   children,
-  extraClass
+  icon,
+  className,
+  textClassName
 }: Pick<AppNavigationLinkProps, 'path' | 'onClick' | 'children'> & {
-  extraClass?: string
+  className?: string
+  textClassName?: string
+  icon?: ReactNode
   filterInfo: FilterInfo | null
 }) {
-  const { query } = useQueryContext()
-  const className = classNames(`${extraClass}`, {
-    'hover:underline': !!filterInfo
-  })
+  const { dashboardState } = useDashboardStateContext()
 
   if (filterInfo) {
-    const { prefix, filter, labels } = filterInfo
-    const newFilters = replaceFilterByPrefix(query, prefix, filter)
-    const newLabels = cleanLabels(newFilters, query.labels, filter[1], labels)
+    const { prefix, filter, labels, extraFilters = [] } = filterInfo
+    let newFilters = replaceFilterByPrefix(dashboardState, prefix, filter)
+    let newLabels = cleanLabels(
+      newFilters,
+      dashboardState.labels,
+      filter[1],
+      labels
+    )
+
+    for (const ef of extraFilters) {
+      newFilters = replaceFilterByPrefix(
+        { ...dashboardState, filters: newFilters },
+        ef.prefix,
+        ef.filter
+      )
+      newLabels = cleanLabels(newFilters, newLabels, ef.filter[1], undefined)
+    }
+
+    const allFilters = [filter, ...extraFilters.map((ef) => ef.filter)]
+    const title = allFilters
+      .map((f) => plainFilterText({ ...dashboardState, labels: newLabels }, f))
+      .join(' and ')
 
     return (
       <AppNavigationLink
-        title={`Add filter: ${plainFilterText({ ...query, labels: newLabels }, filter)}`}
-        className={className}
+        title={`Add filter: ${title}`}
+        className={classNames(className, 'group')}
         path={path}
         onClick={onClick}
         search={(search) => ({
@@ -47,10 +68,18 @@ export function DrilldownLink({
           labels: newLabels
         })}
       >
-        {children}
+        {icon}
+        <span className={classNames(textClassName, 'group-hover:underline')}>
+          {children}
+        </span>
       </AppNavigationLink>
     )
   } else {
-    return <span className={className}>{children}</span>
+    return (
+      <span className={className}>
+        {icon}
+        <span className={textClassName}>{children}</span>
+      </span>
+    )
   }
 }

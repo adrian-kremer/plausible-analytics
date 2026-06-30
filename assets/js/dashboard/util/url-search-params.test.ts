@@ -1,8 +1,10 @@
-import { Filter } from '../query'
+import { Filter } from '../dashboard-state'
 import {
   encodeURIComponentPermissive,
+  getSearchWithEnforcedSegment,
   isSearchEntryDefined,
-  getRedirectTarget,
+  maybeGetLatestReadableSearch,
+  maybeReloadForApiVersion,
   parseFilter,
   parseLabelsEntry,
   parseSearch,
@@ -206,57 +208,124 @@ describe(`${stringifySearch.name}`, () => {
   })
 })
 
-describe(`${getRedirectTarget.name}`, () => {
+describe(`${maybeGetLatestReadableSearch.name}`, () => {
   it.each([
     [''],
     ['?auth=_Y6YOjUl2beUJF_XzG1hk&theme=light&background=%23ee00ee'],
     ['?keybindHint=Escape&with_imported=true'],
     ['?f=is,page,/blog/:category/:article-name&date=2024-10-10&period=day'],
     ['?f=is,country,US&l=US,United%20States']
-  ])('for modern search %p returns null', (search) => {
-    expect(
-      getRedirectTarget({
-        pathname: '/example.com%2Fdeep%2Fpath',
-        search
-      } as Location)
-    ).toBeNull()
+  ])('for modern search string %p returns null', (search) => {
+    expect(maybeGetLatestReadableSearch(search)).toBeNull()
   })
 
-  it('returns updated URL for jsonurl style filters (v2), and running the updated value through the function again returns null (no redirect loop)', () => {
-    const pathname = '/'
+  it('returns updated search string for jsonurl style filters (v2), and running the updated value through the function again returns null (no redirect loop)', () => {
     const search =
       '?filters=((is,exit_page,(/plausible.io)),(is,source,(Brave)),(is,city,(993800)))&labels=(993800:Johannesburg)'
     const expectedUpdatedSearch =
       '?f=is,exit_page,/plausible.io&f=is,source,Brave&f=is,city,993800&l=993800,Johannesburg&r=v2'
-    expect(
-      getRedirectTarget({
-        pathname,
-        search
-      } as Location)
-    ).toEqual(`${pathname}${expectedUpdatedSearch}`)
-    expect(
-      getRedirectTarget({
-        pathname,
-        search: expectedUpdatedSearch
-      } as Location)
-    ).toBeNull()
+    expect(maybeGetLatestReadableSearch(search)).toEqual(expectedUpdatedSearch)
+    expect(maybeGetLatestReadableSearch(expectedUpdatedSearch)).toBeNull()
   })
 
-  it('returns updated URL for page=... style filters (v1), and running the updated value through the function again returns null (no redirect loop)', () => {
-    const pathname = '/'
-    const search = '?page=/docs'
-    const expectedUpdatedSearch = '?f=is,page,/docs&r=v1'
+  it.each([
+    ['?page=/docs', '?f=is,page,/docs&r=v1'],
+    ['?page=%C3%AA&embed=true', '?f=is,page,%C3%AA&embed=true&r=v1'],
+    [
+      '?page=/|/foo&goal=~Signup&source=!Facebook|Instagram',
+      '?f=is,page,/,/foo&f=contains,goal,Signup&f=is_not,source,Facebook,Instagram&r=v1'
+    ]
+  ])(
+    'returns updated search string v1 style filter %s, and running the updated value through the function again returns null (no redirect loop)',
+    (searchString, expectedSearchString) => {
+      expect(maybeGetLatestReadableSearch(searchString)).toEqual(
+        expectedSearchString
+      )
+      expect(maybeGetLatestReadableSearch(expectedSearchString)).toBeNull()
+    }
+  )
+})
+
+describe(`${getSearchWithEnforcedSegment.name}`, () => {
+  it('adds enforced segment appropriately, and running the updated value through the function again returns the same value', () => {
+    const segment = { id: 100, name: 'Eastern Europe' }
+    const search = '?auth=foo&embed=true'
+    const expectedUpdatedSearch =
+      '?f=is,segment,100&l=segment-100,Eastern%20Europe&auth=foo&embed=true'
+    expect(getSearchWithEnforcedSegment(search, segment)).toEqual(
+      expectedUpdatedSearch
+    )
     expect(
-      getRedirectTarget({
-        pathname,
-        search
-      } as Location)
-    ).toEqual(`${pathname}${expectedUpdatedSearch}`)
-    expect(
-      getRedirectTarget({
-        pathname,
-        search: expectedUpdatedSearch
-      } as Location)
-    ).toBeNull()
+      getSearchWithEnforcedSegment(expectedUpdatedSearch, segment)
+    ).toEqual(expectedUpdatedSearch)
+  })
+})
+
+describe(`${maybeReloadForApiVersion.name}`, () => {
+  const dashboardPathname = '/example.com'
+
+  beforeEach(() => {
+    jest.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    jest.restoreAllMocks()
+  })
+
+  type MockWindowLocation = Location & { replace: jest.Mock }
+
+  function makeLocation(search: string): MockWindowLocation {
+    return {
+      pathname: dashboardPathname,
+      search,
+      hash: '',
+      replace: jest.fn()
+    } as unknown as MockWindowLocation
+  }
+
+  function makeHeaders(version: string | null): Headers {
+    const headers = new Headers()
+    if (version !== null) headers.set('x-api-version', version)
+    return headers
+  }
+
+  it('reloads when effective API version is greater than expected', () => {
+    const location = makeLocation('')
+    maybeReloadForApiVersion(location, makeHeaders('1'))
+    expect(location.replace).toHaveBeenCalledWith(
+      `${dashboardPathname}?api_version_reloaded=1`
+    )
+  })
+
+  it('does not reload when effective API version equals expected', () => {
+    const location = makeLocation('')
+    maybeReloadForApiVersion(location, makeHeaders('0'))
+    expect(location.replace).not.toHaveBeenCalled()
+  })
+
+  it('does not reload when effective API version is less than expected (FE loaded from newer node, cluster not fully updated)', () => {
+    const location = makeLocation('')
+    maybeReloadForApiVersion(location, makeHeaders('-1'))
+    expect(location.replace).not.toHaveBeenCalled()
+  })
+
+  it('does not reload when x-api-version header is absent', () => {
+    const location = makeLocation('')
+    maybeReloadForApiVersion(location, makeHeaders(null))
+    expect(location.replace).not.toHaveBeenCalled()
+  })
+
+  it('does not reload when already reloaded for this version', () => {
+    const location = makeLocation('?api_version_reloaded=1')
+    maybeReloadForApiVersion(location, makeHeaders('1'))
+    expect(location.replace).not.toHaveBeenCalled()
+  })
+
+  it('reloads again if a newer version is detected after a previous reload', () => {
+    const location = makeLocation('?api_version_reloaded=1')
+    maybeReloadForApiVersion(location, makeHeaders('2'))
+    expect(location.replace).toHaveBeenCalledWith(
+      `${dashboardPathname}?api_version_reloaded=2`
+    )
   })
 })

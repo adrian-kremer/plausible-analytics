@@ -9,6 +9,7 @@ defmodule PlausibleWeb.Live.Sites do
   require Logger
 
   alias Plausible.Sites
+  alias Plausible.Sites.Index
   alias Plausible.Teams
 
   alias PlausibleWeb.Components.PrimaDropdown
@@ -17,29 +18,49 @@ defmodule PlausibleWeb.Live.Sites do
     team = socket.assigns.current_team
     user = socket.assigns.current_user
 
-    uri =
-      ("/sites?" <> URI.encode_query(Map.take(params, ["filter_text"])))
-      |> URI.new!()
+    uri_params = sanitize_uri_params(params)
+    filter_text = uri_params["filter_text"] || ""
+
+    index_options =
+      params
+      |> get_index_options(user, team)
+      |> Map.put(:team, team)
+
+    index_state = Index.build(user, index_options)
 
     socket =
       socket
-      |> assign(:uri, uri)
-      |> assign(
-        :team_invitations,
-        Teams.Invitations.all(user)
-      )
-      |> assign(:hourly_stats, %{})
-      |> assign(:filter_text, String.trim(params["filter_text"] || ""))
+      |> assign(:sparklines, %{})
+      |> assign(:index_state, index_state)
       |> assign(init_consolidated_view_assigns(user, team))
+      |> assign(:team_invitations, [])
+      |> assign(:site_invitations, [])
+      |> assign(:site_ownership_invitations, [])
+      |> assign(:filter_text, filter_text)
+      |> assign(:uri_params, uri_params)
 
     {:ok, socket}
   end
 
   def handle_params(params, _uri, socket) do
+    uri_params = sanitize_uri_params(params)
+
+    sort_opts =
+      Index.UserPreference.new(%{
+        sort_by: uri_params["sort_by"] || socket.assigns.index_state.sort_by,
+        sort_direction: uri_params["sort_direction"] || socket.assigns.index_state.sort_direction
+      })
+
     socket =
       socket
-      |> assign(:params, params)
-      |> load_sites()
+      |> assign(:uri_params, uri_params)
+      |> assign(:filter_text, uri_params["filter_text"] || "")
+      |> assign(
+        :index_state,
+        Index.sort(socket.assigns.index_state, sort_opts)
+      )
+      |> load_page()
+      |> load_invitations()
       |> assign_new(:has_sites?, fn %{current_user: current_user} ->
         Teams.Users.has_sites?(current_user, include_pending?: true)
       end)
@@ -84,17 +105,11 @@ defmodule PlausibleWeb.Live.Sites do
   end
 
   def render(assigns) do
-    assigns =
-      assign(
-        assigns,
-        :invitations_map,
-        Enum.map(assigns.invitations, &{&1.invitation.invitation_id, &1}) |> Enum.into(%{})
-      )
-      |> assign(:searching?, String.trim(assigns.filter_text) != "")
+    assigns = assign(assigns, :searching?, assigns.filter_text != "")
 
     ~H"""
     <.flash_messages flash={@flash} />
-    <div class="container pt-6">
+    <div class="group/sort container pt-6">
       <PlausibleWeb.Live.Components.Visitors.gradient_defs />
       <.upgrade_nag_screen :if={
         @needs_to_upgrade == {:needs_to_upgrade, :no_active_trial_or_subscription}
@@ -114,43 +129,58 @@ defmodule PlausibleWeb.Live.Sites do
         </.unstyled_link>
       </div>
 
-      <PlausibleWeb.Team.Notice.team_invitations team_invitations={@team_invitations} />
-
       <div
         :if={not @is_empty_state?}
         class="relative z-10 pt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2"
       >
-        <.search_form filter_text={@filter_text} uri={@uri} />
-        <PrimaDropdown.dropdown
-          :if={@consolidated_view_cta_dismissed?}
-          id="add-site-dropdown"
-        >
-          <PrimaDropdown.dropdown_trigger as={&button/1} mt?={false}>
-            <Heroicons.plus class="size-4" /> Add
-            <Heroicons.chevron_down mini class="size-4 mt-0.5" />
-          </PrimaDropdown.dropdown_trigger>
+        <.search_form filter_text={@filter_text} />
+        <div class="flex items-center gap-x-2">
+          <.sort_dropdown index_state={@index_state} />
 
-          <PrimaDropdown.dropdown_menu>
-            <PrimaDropdown.dropdown_item
-              as={&link/1}
-              href={Routes.site_path(@socket, :new, %{flow: PlausibleWeb.Flows.provisioning()})}
-            >
-              <Heroicons.plus class={PrimaDropdown.dropdown_item_icon_class()} /> Add website
-            </PrimaDropdown.dropdown_item>
-            <PrimaDropdown.dropdown_item phx-click="consolidated-view-cta-restore">
-              <Heroicons.plus class={PrimaDropdown.dropdown_item_icon_class()} />
-              Add consolidated view
-            </PrimaDropdown.dropdown_item>
-          </PrimaDropdown.dropdown_menu>
-        </PrimaDropdown.dropdown>
+          <PrimaDropdown.dropdown
+            :if={@consolidated_view_cta_dismissed?}
+            id="add-site-dropdown"
+          >
+            <PrimaDropdown.dropdown_trigger id="add-site-dropdown-trigger" theme="primary">
+              <Heroicons.plus class="size-4" /> Add
+              <Heroicons.chevron_down mini class="size-4 mt-0.5" />
+            </PrimaDropdown.dropdown_trigger>
 
-        <a
-          :if={!@consolidated_view_cta_dismissed?}
-          href={"/sites/new?flow=#{PlausibleWeb.Flows.provisioning()}"}
-          class="whitespace-nowrap truncate inline-flex items-center justify-center gap-x-2 max-w-fit font-medium rounded-md px-3.5 py-2.5 text-sm transition-all duration-150 cursor-pointer disabled:cursor-not-allowed bg-indigo-600 text-white hover:bg-indigo-700 focus-visible:outline-indigo-600 disabled:bg-indigo-400/60 disabled:dark:bg-indigo-600/30 disabled:dark:text-white/35"
-        >
-          <Heroicons.plus class="size-4" /> Add website
-        </a>
+            <PrimaDropdown.dropdown_menu id="add-site-dropdown-menu">
+              <PrimaDropdown.dropdown_item
+                as={&link/1}
+                id="add-site-dropdown-menuitem-1"
+                href={Routes.site_path(@socket, :new, %{flow: PlausibleWeb.Flows.provisioning()})}
+              >
+                <Heroicons.plus class={PrimaDropdown.dropdown_item_icon_class()} /> Add website
+              </PrimaDropdown.dropdown_item>
+              <PrimaDropdown.dropdown_item
+                id="add-site-dropdown-menuitem-2"
+                phx-click="consolidated-view-cta-restore"
+              >
+                <Heroicons.plus class={PrimaDropdown.dropdown_item_icon_class()} />
+                Add consolidated view
+              </PrimaDropdown.dropdown_item>
+            </PrimaDropdown.dropdown_menu>
+          </PrimaDropdown.dropdown>
+
+          <.button_link
+            :if={!@consolidated_view_cta_dismissed?}
+            href={"/sites/new?flow=#{PlausibleWeb.Flows.provisioning()}"}
+            mt?={false}
+          >
+            <Heroicons.plus class="size-4" /> Add website
+          </.button_link>
+        </div>
+      </div>
+
+      <div class="flex flex-col gap-y-4 my-4">
+        <PlausibleWeb.Team.Notice.team_invitations team_invitations={@team_invitations} />
+        <PlausibleWeb.Team.Notice.site_ownership_invitations
+          site_ownership_invitations={@site_ownership_invitations}
+          current_team={@current_team}
+        />
+        <PlausibleWeb.Team.Notice.site_invitations site_invitations={@site_invitations} />
       </div>
 
       <p :if={@searching? and @sites.entries == []} class="mt-4 dark:text-gray-100 text-center">
@@ -175,13 +205,35 @@ defmodule PlausibleWeb.Live.Sites do
             <Heroicons.plus class="size-4" /> Add website
           </.button_link>
           <.button_link
-            :if={not Teams.setup?(@current_team) and @has_sites?}
-            href={Routes.auth_path(@socket, :select_team)}
+            :if={not Teams.setup?(@current_team) and @has_sites? and length(@teams) == 1}
+            href={Routes.site_path(@socket, :index, __team: hd(@teams).identifier)}
             theme="secondary"
             mt?={false}
           >
             Go to team sites
           </.button_link>
+
+          <PrimaDropdown.dropdown
+            :if={not Teams.setup?(@current_team) and @has_sites? and length(@teams) > 1}
+            id="go-to-team-dropdown"
+          >
+            <PrimaDropdown.dropdown_trigger id="go-to-team-dropdown-trigger" theme="secondary">
+              Go to team sites <Heroicons.chevron_down mini class="size-4 mt-0.5" />
+            </PrimaDropdown.dropdown_trigger>
+
+            <PrimaDropdown.dropdown_menu id="go-to-team-dropdown-menu">
+              <div class="max-h-[200px] overflow-y-auto">
+                <PrimaDropdown.dropdown_item
+                  :for={team <- @teams}
+                  as={&link/1}
+                  id={"go-to-team-dropdown-menuitem-#{team.identifier}"}
+                  href={Routes.site_path(@socket, :index, __team: team.identifier)}
+                >
+                  {Teams.name(team)}
+                </PrimaDropdown.dropdown_item>
+              </div>
+            </PrimaDropdown.dropdown_menu>
+          </PrimaDropdown.dropdown>
         </div>
       </div>
 
@@ -199,27 +251,17 @@ defmodule PlausibleWeb.Live.Sites do
             current_team={@current_team}
           />
           <.consolidated_view_card
-            :if={
-              not @searching? and not is_nil(@consolidated_view) and
-                consolidated_view_ok_to_display?(@current_team)
-            }
+            :if={not @searching? and not is_nil(@consolidated_view)}
             can_manage_consolidated_view?={@can_manage_consolidated_view?}
             consolidated_view={@consolidated_view}
-            consolidated_stats={@consolidated_stats}
+            consolidated_sparkline={@consolidated_sparkline}
             current_user={@current_user}
             current_team={@current_team}
           />
           <%= for site <- @sites.entries do %>
             <.site
-              :if={site.entry_type in ["pinned_site", "site"]}
               site={site}
-              hourly_stats={Map.get(@hourly_stats, site.domain, :loading)}
-            />
-            <.invitation
-              :if={site.entry_type == "invitation"}
-              site={site}
-              invitation={@invitations_map[hd(site.invitations).invitation_id]}
-              hourly_stats={Map.get(@hourly_stats, site.domain, :loading)}
+              sparkline={Map.get(@sparklines, site.domain, :loading)}
             />
           <% end %>
         </ul>
@@ -227,11 +269,15 @@ defmodule PlausibleWeb.Live.Sites do
         <.pagination
           :if={@sites.total_pages > 1}
           id="sites-pagination"
-          uri={@uri}
+          uri={URI.new!(Routes.site_path(@socket, :index, @uri_params))}
           page_number={@sites.page_number}
           total_pages={@sites.total_pages}
         >
-          Total of <span class="font-medium">{@sites.total_entries}</span> sites
+          Total of
+          <span class="font-medium">
+            {PlausibleWeb.TextHelpers.number_format(@sites.total_entries)}
+          </span>
+          sites. Page {@sites.page_number} of {@sites.total_pages}
         </.pagination>
       </div>
     </div>
@@ -391,8 +437,8 @@ defmodule PlausibleWeb.Live.Sites do
       class="relative row-span-2"
     >
       <.unstyled_link
-        href={"/#{URI.encode_www_form(@consolidated_view.domain)}"}
-        class="flex flex-col justify-between gap-6 h-full bg-white p-6 dark:bg-gray-900 rounded-md shadow-sm cursor-pointer hover:shadow-lg transition-shadow duration-150"
+        href={Routes.stats_path(PlausibleWeb.Endpoint, :stats, @consolidated_view.domain, [])}
+        class="flex flex-col justify-between gap-6 h-full bg-white p-6 dark:bg-gray-900 rounded-md shadow-sm cursor-pointer hover:shadow-md transition-shadow duration-150"
       >
         <div class="flex flex-col flex-1 justify-between gap-y-5">
           <div class="flex flex-col gap-y-2 mb-auto">
@@ -404,49 +450,49 @@ defmodule PlausibleWeb.Live.Sites do
             </h3>
           </div>
           <span
-            :if={is_map(@consolidated_stats)}
-            class="max-w-sm sm:max-w-none text-indigo-500 my-auto"
+            :if={is_map(@consolidated_sparkline)}
+            class="h-[48px] max-w-sm sm:max-w-none text-indigo-500 my-auto"
             data-test-id="consolidated-view-chart-loaded"
           >
             <PlausibleWeb.Live.Components.Visitors.chart
-              intervals={@consolidated_stats.intervals}
+              intervals={@consolidated_sparkline.intervals}
               height={80}
             />
           </span>
         </div>
         <div
-          :if={is_map(@consolidated_stats)}
+          :if={is_map(@consolidated_sparkline)}
           data-test-id="consolidated-view-stats-loaded"
           class="flex flex-col flex-1 justify-between gap-y-2.5 sm:gap-y-5"
         >
           <div class="flex flex-col sm:flex-row justify-between gap-2.5 sm:gap-2 flex-1 w-full">
             <.consolidated_view_stat
-              value={large_number_format(@consolidated_stats.visitors)}
+              value={large_number_format(@consolidated_sparkline.visitors)}
               label="Unique visitors"
-              change={@consolidated_stats.visitors_change}
+              change={@consolidated_sparkline.visitors_change}
             />
             <.consolidated_view_stat
-              value={large_number_format(@consolidated_stats.visits)}
+              value={large_number_format(@consolidated_sparkline.visits)}
               label="Total visits"
-              change={@consolidated_stats.visits_change}
+              change={@consolidated_sparkline.visits_change}
             />
           </div>
           <div class="flex flex-col sm:flex-row justify-between gap-2.5 sm:gap-2 flex-1 w-full">
             <.consolidated_view_stat
-              value={large_number_format(@consolidated_stats.pageviews)}
+              value={large_number_format(@consolidated_sparkline.pageviews)}
               label="Total pageviews"
-              change={@consolidated_stats.pageviews_change}
+              change={@consolidated_sparkline.pageviews_change}
             />
             <.consolidated_view_stat
-              value={@consolidated_stats.views_per_visit}
+              value={@consolidated_sparkline.views_per_visit}
               label="Views per visit"
-              change={@consolidated_stats.views_per_visit_change}
+              change={@consolidated_sparkline.views_per_visit_change}
             />
           </div>
         </div>
         <div
-          :if={@consolidated_stats == :loading}
-          class="flex flex-col gap-y-2 min-h-[254px] h-full text-center animate-pulse"
+          :if={@consolidated_sparkline == :loading}
+          class="flex flex-col gap-y-2 h-[290px] sm:h-[236px] text-center animate-pulse"
           data-test-id="consolidated-viw-stats-loading"
         >
           <div class="flex-2 dark:bg-gray-750 bg-gray-100 rounded-md"></div>
@@ -485,47 +531,12 @@ defmodule PlausibleWeb.Live.Sites do
   end
 
   attr(:site, Plausible.Site, required: true)
-  attr(:invitation, :map, required: true)
-  attr(:hourly_stats, :map, required: true)
-
-  def invitation(assigns) do
-    assigns =
-      assigns
-      |> assign(:modal_id, "invitation-modal-#{assigns[:invitation].invitation.invitation_id}")
-
-    ~H"""
-    <li
-      class="group relative cursor-pointer"
-      id={"site-card-#{hash_domain(@site.domain)}"}
-      data-domain={@site.domain}
-      phx-click={Prima.Modal.open(@modal_id)}
-    >
-      <div class="col-span-1 flex flex-col gap-y-5 bg-white dark:bg-gray-900 rounded-md shadow-sm p-6 group-hover:shadow-lg cursor-pointer transition duration-100">
-        <div class="w-full flex items-center justify-between gap-x-2.5">
-          <.favicon domain={@site.domain} />
-          <div class="flex-1 w-full truncate">
-            <h3 class="text-gray-900 font-medium text-md sm:text-lg leading-[22px] truncate dark:text-gray-100">
-              {@site.domain}
-            </h3>
-          </div>
-          <.pill color={:green}>
-            Pending invitation
-          </.pill>
-        </div>
-        <.site_stats hourly_stats={@hourly_stats} />
-      </div>
-      <.invitation_modal id={@modal_id} site={@site} invitation={@invitation} />
-    </li>
-    """
-  end
-
-  attr(:site, Plausible.Site, required: true)
-  attr(:hourly_stats, :map, required: true)
+  attr(:sparkline, :map, required: true)
 
   def site(assigns) do
     ~H"""
     <li
-      class="group relative"
+      class="group relative group-has-[[data-sort-trigger].phx-click-loading]/sort:opacity-75"
       id={"site-card-#{hash_domain(@site.domain)}"}
       data-domain={@site.domain}
       data-pin-toggled={
@@ -541,7 +552,10 @@ defmodule PlausibleWeb.Live.Sites do
         )
       }
     >
-      <.unstyled_link href={"/#{URI.encode_www_form(@site.domain)}"} class="block">
+      <.unstyled_link
+        href={Routes.stats_path(PlausibleWeb.Endpoint, :stats, @site.domain, [])}
+        class="block group-has-[.phx-click-loading]/sort:animate-pulse group-has-[.phx-click-loading]/sort:pointer-events-none"
+      >
         <div class="col-span-1 flex flex-col gap-y-5 bg-white dark:bg-gray-900 rounded-md shadow-sm p-6 group-hover:shadow-lg cursor-pointer transition duration-100">
           <div class="w-full flex items-center justify-between gap-x-2.5">
             <.favicon domain={@site.domain} />
@@ -554,126 +568,134 @@ defmodule PlausibleWeb.Live.Sites do
               </h3>
             </div>
           </div>
-          <.site_stats hourly_stats={@hourly_stats} />
+          <.site_stats sparkline={@sparkline} />
         </div>
       </.unstyled_link>
 
       <div class="absolute right-1 top-3.5">
-        <.ellipsis_menu site={@site} can_manage?={List.first(@site.memberships).role != :viewer} />
+        <.ellipsis_menu
+          site={@site}
+          can_manage?={List.first(@site.memberships).role in [:owner, :admin, :editor]}
+        />
       </div>
     </li>
     """
   end
 
   def ellipsis_menu(assigns) do
+    assigns = assign(assigns, %{dropdown_id: "site-#{assigns[:site].domain}-dropdown"})
+
     ~H"""
-    <.dropdown>
-      <:button class="size-10 rounded-md hover:cursor-pointer text-gray-400 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100">
-        <Heroicons.ellipsis_vertical class="absolute top-3 right-3 size-5 transition-colors duration-150" />
-      </:button>
-      <:menu class="!mt-0 mr-4 min-w-40">
-        <!-- adjust position because click area is much bigger than icon. Default positioning from click area looks weird -->
-        <.dropdown_item
-          :if={@can_manage?}
-          href={"/#{URI.encode_www_form(@site.domain)}/settings/general"}
-          class="group/item !flex items-center gap-x-2"
-        >
-          <Heroicons.cog_6_tooth class="size-5 text-gray-600 dark:text-gray-400 group-hover/item:text-gray-900 dark:group-hover/item:text-gray-100" />
-          <span>Settings</span>
-        </.dropdown_item>
+    <div class="flex items-center">
+      <button
+        :if={@site.pinned_at}
+        data-test-id="site-card-pin-icon"
+        phx-click={
+          JS.hide(
+            transition: {"duration-500", "opacity-100", "opacity-0"},
+            to: "#site-card-#{hash_domain(@site.domain)}",
+            time: 500
+          )
+          |> JS.push("pin-toggle")
+        }
+        phx-value-domain={@site.domain}
+        class="cursor-pointer p-1"
+      >
+        <PlausibleWeb.Components.Icons.pin_icon
+          filled={true}
+          class="size-4.5 pb-px shrink-0 text-indigo-600 dark:text-indigo-500"
+        />
+      </button>
 
-        <.dropdown_item
-          :if={Sites.regular?(@site)}
-          href="#"
-          x-on:click.prevent
-          phx-click={
-            JS.hide(
-              transition: {"duration-500", "opacity-100", "opacity-0"},
-              to: "#site-card-#{hash_domain(@site.domain)}",
-              time: 500
-            )
-            |> JS.push("pin-toggle")
-          }
-          phx-value-domain={@site.domain}
-          class="group/item !flex items-center gap-x-2"
+      <PrimaDropdown.dropdown id={@dropdown_id}>
+        <PrimaDropdown.dropdown_trigger
+          id={"#{@dropdown_id}-trigger"}
+          theme="ghost"
+          class="!px-2.5"
         >
-          <.icon_pin
-            :if={@site.pinned_at}
-            filled={true}
-            class="size-[1.15rem] text-indigo-600 dark:text-indigo-500 group-hover/item:text-indigo-700 dark:group-hover/item:text-indigo-400"
-          />
-          <span :if={@site.pinned_at}>Unpin site</span>
+          <Heroicons.ellipsis_vertical class="size-5" />
+        </PrimaDropdown.dropdown_trigger>
 
-          <.icon_pin
-            :if={!@site.pinned_at}
-            class="size-5 text-gray-600 dark:text-gray-400 group-hover/item:text-gray-900 dark:group-hover/item:text-gray-100"
-          />
-          <span :if={!@site.pinned_at}>Pin site</span>
-        </.dropdown_item>
-        <.dropdown_item
-          :if={Application.get_env(:plausible, :environment) == "dev" and Sites.regular?(@site)}
-          href={Routes.site_path(PlausibleWeb.Endpoint, :delete_site, @site.domain)}
-          method="delete"
-          class="group/item !flex items-center gap-x-2"
-        >
-          <Heroicons.trash class="size-5 text-red-500" />
-          <span class="text-red-500">[DEV ONLY] Quick delete</span>
-        </.dropdown_item>
-      </:menu>
-    </.dropdown>
+        <PrimaDropdown.dropdown_menu id={"#{@dropdown_id}-menu"}>
+          <PrimaDropdown.dropdown_item
+            :if={@can_manage?}
+            id={"#{@dropdown_id}-item-1"}
+            as={&link/1}
+            href={Routes.site_path(PlausibleWeb.Endpoint, :settings_general, @site.domain)}
+          >
+            <Heroicons.cog_6_tooth class={PrimaDropdown.dropdown_item_icon_class()} /> Settings
+          </PrimaDropdown.dropdown_item>
+
+          <PrimaDropdown.dropdown_item
+            :if={Sites.regular?(@site)}
+            id={"#{@dropdown_id}-item-2"}
+            data-test-id="ellipsis-menu-pin-item"
+            phx-click={
+              JS.hide(
+                transition: {"duration-500", "opacity-100", "opacity-0"},
+                to: "#site-card-#{hash_domain(@site.domain)}",
+                time: 500
+              )
+              |> JS.push("pin-toggle")
+            }
+            phx-value-domain={@site.domain}
+          >
+            <PlausibleWeb.Components.Icons.pin_icon
+              :if={@site.pinned_at}
+              filled={true}
+              class={PrimaDropdown.dropdown_item_icon_class()}
+            />
+            <PlausibleWeb.Components.Icons.pin_icon
+              :if={!@site.pinned_at}
+              class={PrimaDropdown.dropdown_item_icon_class()}
+            />
+            {if @site.pinned_at, do: "Unpin site", else: "Pin site"}
+          </PrimaDropdown.dropdown_item>
+
+          <PrimaDropdown.dropdown_item
+            :if={Application.get_env(:plausible, :environment) == "dev" and Sites.regular?(@site)}
+            id={"#{@dropdown_id}-item-3"}
+            phx-click="delete-site"
+            phx-value-domain={@site.domain}
+          >
+            <Heroicons.trash class="size-4 text-red-600" /> [DEV ONLY] Quick delete
+          </PrimaDropdown.dropdown_item>
+        </PrimaDropdown.dropdown_menu>
+      </PrimaDropdown.dropdown>
+    </div>
     """
   end
 
-  attr(:rest, :global)
-  attr(:filled, :boolean, default: false)
-
-  def icon_pin(assigns) do
-    ~H"""
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 24 24"
-      fill={if @filled, do: "currentColor", else: "none"}
-      stroke="currentColor"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      stroke-width="1.5"
-      {@rest}
-    >
-      <path d="m4 20 4.5-4.5-.196.196M14.314 21.005l-5.657-5.657L3 9.69l1.228-1.228a3 3 0 0 1 3.579-.501l.58.322 7.34-5.664 5.658 5.657-5.665 7.34.323.581a3 3 0 0 1-.501 3.578l-1.228 1.229Z" />
-    </svg>
-    """
-  end
-
-  attr(:hourly_stats, :any, required: true)
+  attr(:sparkline, :any, required: true)
 
   def site_stats(assigns) do
     ~H"""
     <div class={[
-      "flex flex-col gap-y-2 h-[122px] text-center animate-pulse",
-      is_map(@hourly_stats) && " hidden"
+      "flex flex-col gap-y-2 h-[116px] text-center animate-pulse",
+      is_map(@sparkline) && " hidden"
     ]}>
       <div class="flex-2 dark:bg-gray-750 bg-gray-100 rounded-md"></div>
       <div class="flex-1 dark:bg-gray-750 bg-gray-100 rounded-md"></div>
     </div>
-    <div :if={is_map(@hourly_stats)}>
+    <div :if={is_map(@sparkline)}>
       <span class="flex flex-col gap-y-5 text-gray-600 dark:text-gray-400 text-sm truncate">
-        <span class="max-w-sm sm:max-w-none text-indigo-500">
+        <span class="h-[48px] max-w-sm sm:max-w-none text-indigo-500">
           <PlausibleWeb.Live.Components.Visitors.chart
-            intervals={@hourly_stats.intervals}
+            intervals={@sparkline.intervals}
             height={80}
           />
         </span>
         <div class="flex justify-between items-end">
           <div class="flex flex-col">
             <p class="text-lg sm:text-xl font-bold text-gray-900 dark:text-gray-100">
-              {large_number_format(@hourly_stats.visitors)}
+              {large_number_format(@sparkline.visitors)}
             </p>
             <p class="text-gray-600 dark:text-gray-400">
-              visitor<span :if={@hourly_stats.visitors != 1}>s</span> in last 24h
+              visitor<span :if={@sparkline.visitors != 1}>s</span> in last 24h
             </p>
           </div>
 
-          <.percentage_change change={@hourly_stats.change} />
+          <.percentage_change change={@sparkline.visitors_change} />
         </div>
       </span>
     </div>
@@ -720,123 +742,59 @@ defmodule PlausibleWeb.Live.Sites do
     """
   end
 
-  attr(:id, :string, required: true)
-  attr(:site, Plausible.Site, required: true)
-  attr(:invitation, :map, required: true)
-
-  def invitation_modal(assigns) do
-    ~H"""
-    <PlausibleWeb.Live.Components.PrimaModal.modal id={@id}>
-      <div class="p-5 pb-3 sm:p-6 sm:pb-3">
-        <div class="hidden sm:block absolute top-0 right-0 pt-4 pr-4">
-          <button
-            phx-click={Prima.Modal.close()}
-            class="text-gray-400 dark:text-gray-500 hover:text-gray-500 dark:hover:text-gray-400"
-          >
-            <span class="sr-only">Close</span>
-            <Heroicons.x_mark class="size-6" />
-          </button>
-        </div>
-        <div class="flex flex-col gap-y-4 text-center sm:text-left">
-          <PlausibleWeb.Live.Components.PrimaModal.modal_title>
-            You're invited to {@site.domain}
-          </PlausibleWeb.Live.Components.PrimaModal.modal_title>
-          <div>
-            <p class="text-sm text-gray-600 dark:text-gray-400 text-pretty">
-              You've been added as <b class="capitalize">{@invitation.invitation.role}</b>
-              to the {@site.domain} analytics dashboard.
-              <%= if !(Map.get(@invitation, :exceeded_limits) || Map.get(@invitation, :no_plan)) &&
-                        @invitation.invitation.role == :owner do %>
-                If you accept the ownership transfer, you will be responsible for billing going forward.
-              <% else %>
-                Welcome aboard!
-              <% end %>
-            </p>
-          </div>
-        </div>
-        <.notice
-          :if={Map.get(@invitation, :missing_features)}
-          title="Missing features"
-          class="mt-4 shadow-xs dark:shadow-none"
-        >
-          <p>
-            The site uses {Map.get(@invitation, :missing_features)},
-            which your current subscription does not support. After accepting ownership of this site,
-            you will not be able to access them unless you <.styled_link
-              class="inline-block"
-              href={Routes.billing_path(PlausibleWeb.Endpoint, :choose_plan)}
-            >
-              upgrade to a suitable plan
-            </.styled_link>.
-          </p>
-        </.notice>
-        <.notice
-          :if={Map.get(@invitation, :exceeded_limits)}
-          title="Unable to accept site ownership"
-          class="mt-4 shadow-xs dark:shadow-none"
-        >
-          <p>
-            Owning this site would exceed your {Map.get(@invitation, :exceeded_limits)}. Please check your usage in
-            <.styled_link
-              class="inline-block"
-              href={Routes.settings_path(PlausibleWeb.Endpoint, :subscription)}
-            >
-              account settings
-            </.styled_link>
-            and upgrade your subscription to accept the site ownership.
-          </p>
-        </.notice>
-        <.notice
-          :if={Map.get(@invitation, :no_plan)}
-          title="No subscription"
-          class="mt-4 shadow-xs dark:shadow-none"
-        >
-          You are unable to accept the ownership of this site because your account does not have a subscription. To become the owner of this site, you should upgrade to a suitable plan.
-        </.notice>
-      </div>
-      <div class="flex flex-col sm:flex-row-reverse gap-3 p-5 sm:p-6">
-        <.button
-          :if={!(Map.get(@invitation, :exceeded_limits) || Map.get(@invitation, :no_plan))}
-          mt?={false}
-          class="w-full sm:w-auto sm:text-sm"
-          data-method="post"
-          data-csrf={Plug.CSRFProtection.get_csrf_token()}
-          data-to={"/sites/invitations/#{@invitation.invitation.invitation_id}/accept"}
-          data-autofocus
-        >
-          Accept and continue
-        </.button>
-        <.button_link
-          :if={Map.get(@invitation, :exceeded_limits) || Map.get(@invitation, :no_plan)}
-          mt?={false}
-          href={Routes.billing_path(PlausibleWeb.Endpoint, :choose_plan)}
-          class="w-full sm:w-auto sm:text-sm"
-          data-autofocus
-        >
-          Upgrade
-        </.button_link>
-        <.button_link
-          mt?={false}
-          class="w-full sm:w-auto sm:text-sm"
-          href="#"
-          theme="secondary"
-          data-method="post"
-          data-csrf={Plug.CSRFProtection.get_csrf_token()}
-          data-to={"/sites/invitations/#{@invitation.invitation.invitation_id}/reject"}
-        >
-          Reject
-        </.button_link>
-      </div>
-    </PlausibleWeb.Live.Components.PrimaModal.modal>
-    """
-  end
-
   attr(:filter_text, :string, default: "")
-  attr(:uri, URI, required: true)
 
   def search_form(assigns) do
     ~H"""
     <.filter_bar filter_text={@filter_text} placeholder="Search Sites"></.filter_bar>
+    """
+  end
+
+  @sort_options [
+    {"Most visitors", Index.UserPreference.default()},
+    {"Fewest visitors", Index.UserPreference.new(%{sort_by: :traffic, sort_direction: :asc})},
+    {"Name A-Z", Index.UserPreference.new(%{sort_by: :alnum, sort_direction: :asc})},
+    {"Name Z-A", Index.UserPreference.new(%{sort_by: :alnum, sort_direction: :desc})}
+  ]
+
+  def sort_dropdown(assigns) do
+    current_label =
+      Enum.find_value(@sort_options, fn {label,
+                                         %Index.UserPreference{
+                                           sort_by: sort_by,
+                                           sort_direction: sort_direction
+                                         }} ->
+        if sort_by == assigns.index_state.sort_by and
+             sort_direction == assigns.index_state.sort_direction,
+           do: label
+      end)
+
+    assigns = assign(assigns, sort_options: @sort_options, current_sort_label: current_label)
+
+    ~H"""
+    <PrimaDropdown.dropdown id="sort-dropdown">
+      <PrimaDropdown.dropdown_trigger
+        id="sort-dropdown-trigger"
+        class="min-w-40 group-has-[[data-sort-trigger].phx-click-loading]/sort:text-gray-800/50 group-has-[[data-sort-trigger].phx-click-loading]/sort:hover:text-gray-800/50 group-has-[[data-sort-trigger].phx-click-loading]/sort:dark:text-gray-100/50 group-has-[[data-sort-trigger].phx-click-loading]/sort:dark:hover:text-gray-100/50 group-has-[[data-sort-trigger].phx-click-loading]/sort:pointer-events-none"
+      >
+        {@current_sort_label}
+        <Heroicons.chevron_down mini class="size-4 mt-0.5" />
+      </PrimaDropdown.dropdown_trigger>
+      <PrimaDropdown.dropdown_menu id="sort-dropdown-menu">
+        <%= for {label, %Index.UserPreference{sort_by: sort_by, sort_direction: direction}} <- @sort_options do %>
+          <PrimaDropdown.dropdown_item
+            id={"sort-dropdown-item-#{sort_by}-#{direction}"}
+            class="min-w-40"
+            phx-click="set-sort"
+            phx-value-sort_by={sort_by}
+            phx-value-sort_direction={direction}
+            data-sort-trigger
+          >
+            {label}
+          </PrimaDropdown.dropdown_item>
+        <% end %>
+      </PrimaDropdown.dropdown_menu>
+    </PrimaDropdown.dropdown>
     """
   end
 
@@ -874,38 +832,7 @@ defmodule PlausibleWeb.Live.Sites do
     site = Enum.find(socket.assigns.sites.entries, &(&1.domain == domain))
 
     if site do
-      socket =
-        case Sites.toggle_pin(socket.assigns.current_user, site) do
-          {:ok, preference} ->
-            flash_message =
-              if preference.pinned_at do
-                "Site pinned"
-              else
-                "Site unpinned"
-              end
-
-            socket
-            |> put_live_flash(:success, flash_message)
-            |> load_sites()
-            |> push_event("js-exec", %{
-              to: "#site-card-#{hash_domain(site.domain)}",
-              attr: "data-pin-toggled"
-            })
-
-          {:error, :too_many_pins} ->
-            flash_message =
-              "Looks like you've hit the pinned sites limit! " <>
-                "Please unpin one of your pinned sites to make room for new pins"
-
-            socket
-            |> put_live_flash(:error, flash_message)
-            |> push_event("js-exec", %{
-              to: "#site-card-#{hash_domain(site.domain)}",
-              attr: "data-pin-failed"
-            })
-        end
-
-      {:noreply, socket}
+      {:noreply, apply_pin_toggle(socket, site)}
     else
       Sentry.capture_message("Attempting to toggle pin for invalid domain.",
         extra: %{domain: domain, user: socket.assigns.current_user.id}
@@ -941,6 +868,17 @@ defmodule PlausibleWeb.Live.Sites do
     {:noreply, socket}
   end
 
+  def handle_event("set-sort", params, socket) do
+    {sort_by, sort_direction} = {params["sort_by"], params["sort_direction"]}
+
+    socket =
+      socket
+      |> reset_pagination()
+      |> set_sort(sort_by, sort_direction)
+
+    {:noreply, socket}
+  end
+
   on_ee do
     def handle_event("consolidated-view-cta-dismiss", _, socket) do
       :ok =
@@ -963,131 +901,125 @@ defmodule PlausibleWeb.Live.Sites do
     end
   end
 
-  defp load_sites(%{assigns: assigns} = socket) do
-    sites =
-      Sites.list_with_invitations(assigns.current_user, assigns.params,
-        filter_by_domain: assigns.filter_text,
-        team: assigns.current_team
+  defp apply_pin_toggle(socket, site) do
+    case Sites.toggle_pin(socket.assigns.current_user, site) do
+      {:ok, preference} ->
+        flash_message = if preference.pinned_at, do: "Site pinned", else: "Site unpinned"
+
+        socket
+        |> put_live_flash(:success, flash_message)
+        |> refresh_index_pins()
+        |> load_page()
+        |> push_event("js-exec", %{
+          to: "#site-card-#{hash_domain(site.domain)}",
+          attr: "data-pin-toggled"
+        })
+
+      {:error, :too_many_pins} ->
+        flash_message =
+          "Looks like you've hit the pinned sites limit! " <>
+            "Please unpin one of your pinned sites to make room for new pins"
+
+        socket
+        |> put_live_flash(:error, flash_message)
+        |> push_event("js-exec", %{
+          to: "#site-card-#{hash_domain(site.domain)}",
+          attr: "data-pin-failed"
+        })
+    end
+  end
+
+  defp load_invitations(%{assigns: %{uri_params: %{"page" => page}}} = socket) when page != "1" do
+    socket
+  end
+
+  defp load_invitations(%{assigns: %{current_user: user, current_team: team}} = socket) do
+    site_transfers =
+      user
+      |> Teams.Invitations.pending_site_transfers_for()
+      |> Enum.map(&Map.put(&1, :ownership_check, ensure_can_take_ownership(&1.site, team)))
+
+    socket
+    |> assign(:team_invitations, Teams.Invitations.pending_team_invitations_for(user))
+    |> assign(:site_invitations, Teams.Invitations.pending_guest_invitations_for(user))
+    |> assign(:site_ownership_invitations, site_transfers)
+  end
+
+  defp load_page(%{assigns: assigns} = socket) do
+    page =
+      Index.paginate(assigns.index_state,
+        page: assigns.uri_params["page"],
+        page_size: assigns.uri_params["page_size"],
+        filter_by_domain: assigns.filter_text
       )
 
-    hourly_stats =
-      if connected?(socket) do
-        try do
-          Plausible.Stats.Clickhouse.last_24h_visitors_hourly_intervals(sites.entries)
-        catch
-          kind, value ->
-            Logger.error(
-              "Could not render 24h visitors hourly intervals: #{inspect(kind)} #{inspect(value)}"
-            )
+    site_entries =
+      Sites.get_for_user_by_ids(assigns.current_user, page.entries, team: assigns.current_team)
 
-            %{}
-        end
+    sites = %{page | entries: site_entries}
+
+    sparklines =
+      if connected?(socket) do
+        Plausible.Stats.Sparkline.parallel_overview(site_entries)
       else
         %{}
       end
 
-    consolidated_stats =
+    consolidated_sparkline =
       if connected?(socket),
-        do: load_consolidated_stats(assigns.consolidated_view),
+        do: load_consolidated_sparkline(assigns.consolidated_view),
         else: :loading
-
-    invitations = extract_invitations(sites.entries, assigns.current_team)
 
     assign(
       socket,
       sites: sites,
-      invitations: invitations,
-      hourly_stats: hourly_stats,
-      consolidated_stats: consolidated_stats || Map.get(assigns, :consolidated_stats)
+      sparklines: sparklines,
+      consolidated_sparkline: consolidated_sparkline || Map.get(assigns, :consolidated_sparkline)
     )
   end
 
-  defp extract_invitations(sites, team) do
-    sites
-    |> Enum.filter(&(&1.entry_type == "invitation"))
-    |> Enum.flat_map(& &1.invitations)
-    |> Enum.map(&check_limits(&1, team))
+  defp refresh_index_pins(socket) do
+    assign(socket, :index_state, Index.refresh_pins(socket.assigns.index_state))
   end
 
   on_ee do
-    defp check_limits(%{role: :owner, site: site} = invitation, team) do
-      case ensure_can_take_ownership(site, team) do
-        :ok ->
-          check_features(invitation, team)
-
-        {:error, :no_plan} ->
-          %{invitation: invitation, no_plan: true}
-
-        {:error, {:over_plan_limits, limits}} ->
-          limits = PlausibleWeb.TextHelpers.pretty_list(limits)
-          %{invitation: invitation, exceeded_limits: limits}
-      end
-    end
-  end
-
-  defp check_limits(invitation, _), do: %{invitation: invitation}
-
-  defdelegate ensure_can_take_ownership(site, team), to: Teams.Invitations
-
-  def check_features(%{role: :owner, site: site} = invitation, team) do
-    case check_feature_access(site, team) do
-      :ok ->
-        %{invitation: invitation}
-
-      {:error, {:missing_features, features}} ->
-        feature_names =
-          features
-          |> Enum.map(& &1.display_name())
-          |> PlausibleWeb.TextHelpers.pretty_list()
-
-        %{invitation: invitation, missing_features: feature_names}
-    end
-  end
-
-  defp check_feature_access(site, new_team) do
-    missing_features =
-      Teams.Billing.features_usage(nil, [site.id])
-      |> Enum.filter(&(&1.check_availability(new_team) != :ok))
-
-    if missing_features == [] do
-      :ok
-    else
-      {:error, {:missing_features, missing_features}}
-    end
+    defdelegate ensure_can_take_ownership(site, team), to: Teams.Invitations
+  else
+    defp ensure_can_take_ownership(_site, _team), do: :ok
   end
 
   defp set_filter_text(socket, filter_text) do
-    filter_text = String.trim(filter_text)
-    uri = socket.assigns.uri
-
-    uri_params =
-      uri.query
-      |> URI.decode_query()
-      |> Map.put("filter_text", filter_text)
-      |> URI.encode_query()
-
-    uri = %{uri | query: uri_params}
+    trimmed = String.trim(filter_text)
+    uri_params = Map.put(socket.assigns.uri_params, "filter_text", trimmed)
 
     socket
-    |> assign(:filter_text, filter_text)
-    |> assign(:uri, uri)
-    |> push_patch(to: URI.to_string(uri), replace: true)
+    |> assign(:uri_params, uri_params)
+    |> assign(:filter_text, trimmed)
+    |> push_patch(to: Routes.site_path(socket, :index, uri_params), replace: true)
   end
 
   defp reset_pagination(socket) do
-    pagination_fields = ["page"]
-    uri = socket.assigns.uri
-
-    uri_params =
-      uri.query
-      |> URI.decode_query()
-      |> Map.drop(pagination_fields)
-      |> URI.encode_query()
-
     assign(socket,
-      uri: %{uri | query: uri_params},
-      params: Map.drop(socket.assigns.params, pagination_fields)
+      uri_params: Map.drop(socket.assigns.uri_params, ["page"])
     )
+  end
+
+  defp set_sort(socket, sort_by, sort_direction) do
+    uri_params =
+      socket.assigns.uri_params
+      |> Map.put("sort_by", sort_by)
+      |> Map.put("sort_direction", sort_direction)
+
+    save_sort_preference(
+      socket.assigns.current_user,
+      socket.assigns.current_team,
+      sort_by,
+      sort_direction
+    )
+
+    socket
+    |> assign(:uri_params, uri_params)
+    |> push_patch(to: Routes.site_path(socket, :index, uri_params), replace: true)
   end
 
   defp hash_domain(domain) do
@@ -1098,7 +1030,7 @@ defmodule PlausibleWeb.Live.Sites do
     [
       consolidated_view: nil,
       can_manage_consolidated_view?: false,
-      consolidated_stats: nil,
+      consolidated_sparkline: nil,
       no_consolidated_view_reason: nil,
       consolidated_view_cta_dismissed?: false
     ]
@@ -1108,12 +1040,8 @@ defmodule PlausibleWeb.Live.Sites do
   on_ee do
     alias Plausible.ConsolidatedView
 
-    defp consolidated_view_ok_to_display?(team) do
-      ConsolidatedView.ok_to_display?(team)
-    end
-
     defp init_consolidated_view_assigns(_user, nil) do
-      # technically this is team not setup, but is also equivalent of having no sites at this moment (can have invitations though), so CTA should not be shown
+      # technically this is team not setup, but is also equivalent of having no sites at this moment, so CTA should not be shown
       no_consolidated_view(no_consolidated_view_reason: :no_sites)
     end
 
@@ -1123,7 +1051,7 @@ defmodule PlausibleWeb.Live.Sites do
           %{
             consolidated_view: view,
             can_manage_consolidated_view?: ConsolidatedView.can_manage?(user, team),
-            consolidated_stats: :loading,
+            consolidated_sparkline: :loading,
             no_consolidated_view_reason: nil,
             consolidated_view_cta_dismissed?: ConsolidatedView.cta_dismissed?(user, team)
           }
@@ -1137,19 +1065,61 @@ defmodule PlausibleWeb.Live.Sites do
       end
     end
 
-    defp load_consolidated_stats(consolidated_view) do
-      case Plausible.Stats.ConsolidatedView.safe_overview_24h(consolidated_view) do
+    defp load_consolidated_sparkline(consolidated_view) do
+      case Plausible.Stats.Sparkline.safe_overview_24h(consolidated_view) do
         {:ok, stats} -> stats
         {:error, :not_found} -> nil
         {:error, :inaccessible} -> :loading
       end
     end
   else
-    defp consolidated_view_ok_to_display?(_team), do: false
-
     defp init_consolidated_view_assigns(_user, _team),
       do: no_consolidated_view(no_consolidated_view_reason: :unavailable)
 
-    defp load_consolidated_stats(_consolidated_view), do: nil
+    defp load_consolidated_sparkline(_consolidated_view), do: nil
+  end
+
+  defp get_index_options(params, user, team) do
+    case {params["sort_by"], params["sort_direction"]} do
+      {nil, nil} ->
+        load_sort_preference(user, team)
+
+      {sort_by, sort_direction} ->
+        Index.UserPreference.new(%{sort_by: sort_by, sort_direction: sort_direction})
+    end
+  end
+
+  defp load_sort_preference(_user, nil), do: Index.UserPreference.default()
+
+  defp load_sort_preference(user, team) do
+    with {:ok, membership} <- Teams.Memberships.get_team_membership(team, user),
+         %Index.UserPreference{sort_by: sort_by} = preference
+         when not is_nil(sort_by) <-
+           Teams.Memberships.get_preference(membership, :sort_index_options) do
+      preference
+    else
+      _ -> Index.UserPreference.default()
+    end
+  end
+
+  defp save_sort_preference(_user, nil, _sort_by, _sort_direction), do: :ok
+
+  defp save_sort_preference(user, team, sort_by, sort_direction) do
+    with {:ok, membership} <- Teams.Memberships.get_team_membership(team, user) do
+      Teams.Memberships.set_preference(membership, :sort_index_options, %{
+        sort_by: sort_by,
+        sort_direction: sort_direction
+      })
+    end
+
+    :ok
+  end
+
+  defp sanitize_uri_params(params) do
+    params
+    |> Map.take(["filter_text", "sort_by", "sort_direction", "page", "page_size"])
+    |> Enum.into(%{}, fn {param_name, param_value} ->
+      {param_name, if(is_binary(param_value), do: String.trim(param_value))}
+    end)
   end
 end

@@ -31,7 +31,7 @@ defmodule Plausible.Segments do
            )
          )}
 
-      site_role in @roles_with_personal_segments or site_role in @roles_with_maybe_site_segments ->
+      site_role in roles_with_personal_segments() or site_role in roles_with_maybe_site_segments() ->
         fields = fields ++ [:owner_id]
 
         {:ok,
@@ -70,6 +70,63 @@ defmodule Plausible.Segments do
     {:ok, Repo.all(query)}
   end
 
+  def search_by_name(%Plausible.Site{} = site, input) do
+    type = :site
+    fields = [:id, :name]
+
+    input_empty? = is_nil(input) or (is_binary(input) and String.trim(input) == "")
+
+    base_query =
+      from(segment in Segment,
+        where: segment.site_id == ^site.id,
+        where: segment.type == ^type,
+        limit: 20
+      )
+
+    query =
+      if input_empty? do
+        from([segment] in base_query,
+          select: ^fields,
+          order_by: [desc: segment.updated_at]
+        )
+      else
+        from([segment] in base_query,
+          select: %{
+            id: segment.id,
+            name: segment.name,
+            match_rank:
+              fragment(
+                "CASE
+                  WHEN lower(?) = lower(?) THEN 0                    -- exact match
+                  WHEN lower(?) LIKE lower(?) || '%' THEN 1          -- starts with
+                  WHEN lower(?) LIKE '% ' || lower(?) || '%' THEN 2  -- after a space
+                  WHEN lower(?) ILIKE ? THEN 3                        -- anywhere
+                END AS match_rank",
+                segment.name,
+                ^input,
+                segment.name,
+                ^input,
+                segment.name,
+                ^input,
+                segment.name,
+                ^"%#{input}%"
+              ),
+            pos:
+              fragment(
+                "position(lower(?) IN lower(?)) AS pos",
+                ^input,
+                segment.name
+              ),
+            len_diff: fragment("abs(length(?) - length(?)) AS len_diff", segment.name, ^input)
+          },
+          where: fragment("? ilike ?", segment.name, ^"%#{input}%"),
+          order_by: fragment("match_rank asc, pos asc, len_diff asc, updated_at desc")
+        )
+      end
+
+    {:ok, Repo.all(query)}
+  end
+
   @spec get_one(pos_integer(), Plausible.Site.t(), atom(), pos_integer() | nil) ::
           {:ok, Segment.t()}
           | error_not_enough_permissions()
@@ -101,8 +158,8 @@ defmodule Plausible.Segments do
     with :ok <- can_insert_one?(site, site_role, params),
          %{valid?: true} = changeset <-
            Segment.changeset(
-             %Segment{},
-             Map.merge(params, %{"site_id" => site.id, "owner_id" => user_id})
+             %Segment{site_id: site.id},
+             Map.merge(params, %{"owner_id" => user_id})
            ),
          :ok <-
            Segment.validate_segment_data(site, params["segment_data"], true) do
@@ -281,6 +338,33 @@ defmodule Plausible.Segments do
     end
   end
 
+  def get_related_shared_links(
+        _site,
+        _site_role,
+        nil
+      ) do
+    {:error, :segment_not_found}
+  end
+
+  def get_related_shared_links(
+        %Plausible.Site{} = site,
+        site_role,
+        segment_id
+      ) do
+    if site_role in roles_with_personal_segments() do
+      {:ok,
+       Repo.all(
+         from(shared_link in Plausible.Site.SharedLink,
+           select: [:name],
+           where: shared_link.segment_id == ^segment_id,
+           where: shared_link.site_id == ^site.id
+         )
+       )}
+    else
+      {:error, :not_enough_permissions}
+    end
+  end
+
   @spec do_get_one(pos_integer(), pos_integer(), pos_integer() | nil) ::
           Segment.t() | nil
   defp do_get_one(user_id, site_id, segment_id)
@@ -349,8 +433,31 @@ defmodule Plausible.Segments do
     |> Repo.aggregate(:count, :id)
   end
 
-  def roles_with_personal_segments(), do: [:viewer, :editor, :admin, :owner, :super_admin]
-  def roles_with_maybe_site_segments(), do: [:editor, :admin, :owner, :super_admin]
+  def to_response_map(%Segment{} = segment, %Plausible.Site{} = site) do
+    %{
+      id: segment.id,
+      name: segment.name,
+      type: segment.type,
+      segment_data: segment.segment_data,
+      owner_id: segment.owner_id,
+      owner_name: owner_name(segment),
+      inserted_at: shift_to_site_tz(segment.inserted_at, site.timezone),
+      updated_at: shift_to_site_tz(segment.updated_at, site.timezone)
+    }
+  end
+
+  defp owner_name(%Segment{owner_id: nil}), do: nil
+  defp owner_name(%Segment{owner: %Plausible.Auth.User{name: name}}), do: name
+  defp owner_name(%Segment{}), do: nil
+
+  defp shift_to_site_tz(%NaiveDateTime{} = naive_utc, timezone) do
+    naive_utc
+    |> DateTime.from_naive!("Etc/UTC")
+    |> Plausible.Times.to_naive_datetime!(timezone)
+  end
+
+  def roles_with_personal_segments(), do: @roles_with_personal_segments
+  def roles_with_maybe_site_segments(), do: @roles_with_maybe_site_segments
 
   def site_segments_available?(%Plausible.Site{} = site),
     do: Plausible.Billing.Feature.SiteSegments.check_availability(site.team) == :ok

@@ -467,6 +467,26 @@ defmodule PlausibleWeb.AuthControllerTest do
 
       refute Repo.get_by(Auth.EmailActivationCode, user_id: user.id)
     end
+
+    test "limits activation attempts to 10 per 5 minutes", %{conn: conn} do
+      conn = put_req_header(conn, "x-forwarded-for", "10.9.8.7")
+
+      response =
+        eventually(
+          fn ->
+            Enum.each(1..10, fn _ ->
+              post(conn, "/activate", %{code: "1111"})
+            end)
+
+            conn = post(conn, "/activate", %{code: "1111"})
+
+            {conn.status == 429, conn}
+          end,
+          500
+        )
+
+      assert html_response(response, 429) =~ "Too many activation attempts"
+    end
   end
 
   describe "GET /login_form" do
@@ -1117,9 +1137,18 @@ defmodule PlausibleWeb.AuthControllerTest do
   end
 
   describe "GET /auth/google/callback" do
-    test "shows error and redirects back to settings when authentication fails", %{conn: conn} do
-      site = insert(:site)
-      callback_params = %{"error" => "access_denied", "state" => "[#{site.id},\"import\"]"}
+    setup [:create_user, :log_in]
+
+    test "shows access denied error and redirects back to settings when authentication fails for import",
+         %{
+           conn: conn
+         } do
+      site = new_site()
+
+      state =
+        Phoenix.Token.sign(PlausibleWeb.Endpoint, "google-oauth-state", [site.id, "import"])
+
+      callback_params = %{"error" => "access_denied", "state" => state}
       conn = get(conn, Routes.auth_path(conn, :google_auth_callback), callback_params)
 
       assert redirected_to(conn, 302) ==
@@ -1127,6 +1156,313 @@ defmodule PlausibleWeb.AuthControllerTest do
 
       assert Phoenix.Flash.get(conn.assigns.flash, :error) =~
                "unable to authenticate your Google Analytics"
+    end
+
+    test "shows access denied error and redirects back to settings when authentication fails for search console",
+         %{conn: conn} do
+      site = new_site()
+
+      state =
+        Phoenix.Token.sign(PlausibleWeb.Endpoint, "google-oauth-state", [
+          site.id,
+          "search-console"
+        ])
+
+      callback_params = %{"error" => "access_denied", "state" => state}
+      conn = get(conn, Routes.auth_path(conn, :google_auth_callback), callback_params)
+
+      assert redirected_to(conn, 302) ==
+               Routes.site_path(conn, :settings_integrations, site.domain)
+
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~
+               "unable to authenticate your Google Analytics"
+    end
+
+    test "shows server error and redirects back to settings when request fails on Google's end for import",
+         %{
+           conn: conn
+         } do
+      site = new_site()
+
+      state =
+        Phoenix.Token.sign(PlausibleWeb.Endpoint, "google-oauth-state", [site.id, "import"])
+
+      callback_params = %{"error" => "server_error", "state" => state}
+      conn = get(conn, Routes.auth_path(conn, :google_auth_callback), callback_params)
+
+      assert redirected_to(conn, 302) ==
+               Routes.site_path(conn, :settings_imports_exports, site.domain)
+
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~
+               "Google's authentication service is temporarily unavailable"
+    end
+
+    test "shows server error and redirects back to settings when request fails on Google's end for search console",
+         %{
+           conn: conn
+         } do
+      site = new_site()
+
+      state =
+        Phoenix.Token.sign(PlausibleWeb.Endpoint, "google-oauth-state", [
+          site.id,
+          "search-console"
+        ])
+
+      callback_params = %{"error" => "temporarily_unavailable", "state" => state}
+      conn = get(conn, Routes.auth_path(conn, :google_auth_callback), callback_params)
+
+      assert redirected_to(conn, 302) ==
+               Routes.site_path(conn, :settings_integrations, site.domain)
+
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~
+               "Google's authentication service is temporarily unavailable"
+    end
+
+    test "shows generic error and redirects back to settings on unknown Google failure for import",
+         %{
+           conn: conn
+         } do
+      site = new_site()
+
+      state =
+        Phoenix.Token.sign(PlausibleWeb.Endpoint, "google-oauth-state", [site.id, "import"])
+
+      callback_params = %{"error" => "unknown", "state" => state}
+      conn = get(conn, Routes.auth_path(conn, :google_auth_callback), callback_params)
+
+      assert redirected_to(conn, 302) ==
+               Routes.site_path(conn, :settings_imports_exports, site.domain)
+
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~
+               "unable to authenticate your Google Analytics"
+    end
+
+    test "shows generic error and redirects back to settings when request fails on Google's end for search console",
+         %{
+           conn: conn
+         } do
+      site = new_site()
+
+      state =
+        Phoenix.Token.sign(PlausibleWeb.Endpoint, "google-oauth-state", [
+          site.id,
+          "search-console"
+        ])
+
+      callback_params = %{"error" => "unknown", "state" => state}
+      conn = get(conn, Routes.auth_path(conn, :google_auth_callback), callback_params)
+
+      assert redirected_to(conn, 302) ==
+               Routes.site_path(conn, :settings_integrations, site.domain)
+
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~
+               "unable to authenticate your Google Analytics"
+    end
+
+    test "rejects error callback with tampered state", %{conn: conn} do
+      site = new_site()
+
+      state =
+        Phoenix.Token.sign(PlausibleWeb.Endpoint, "google-oauth-state", [site.id, "import"])
+
+      callback_params = %{"error" => "access_denied", "state" => state <> "gibberish"}
+      conn = get(conn, Routes.auth_path(conn, :google_auth_callback), callback_params)
+
+      assert redirected_to(conn, 302) == Routes.auth_path(conn, :login_form)
+    end
+
+    test "rejects error  callback with signed state containing non-existent site", %{conn: conn} do
+      site = new_site()
+      Repo.delete!(site)
+
+      state =
+        Phoenix.Token.sign(PlausibleWeb.Endpoint, "google-oauth-state", [site.id, "import"])
+
+      callback_params = %{"error" => "access_denied", "state" => state}
+      conn = get(conn, Routes.auth_path(conn, :google_auth_callback), callback_params)
+
+      assert redirected_to(conn, 302) == Routes.auth_path(conn, :login_form)
+    end
+
+    test "rejects success callback with tampered state", %{conn: conn} do
+      site = new_site()
+
+      state =
+        Phoenix.Token.sign(PlausibleWeb.Endpoint, "google-oauth-state", [site.id, "import"])
+
+      callback_params = %{"code" => "CodeForToken", "state" => state <> "gibberish"}
+      conn = get(conn, Routes.auth_path(conn, :google_auth_callback), callback_params)
+
+      assert redirected_to(conn, 302) == Routes.auth_path(conn, :login_form)
+    end
+
+    test "rejects success callback with signed state containing non-existent site", %{conn: conn} do
+      site = new_site()
+      Repo.delete!(site)
+
+      state =
+        Phoenix.Token.sign(PlausibleWeb.Endpoint, "google-oauth-state", [site.id, "import"])
+
+      callback_params = %{"code" => "CodeForToken", "state" => state}
+      conn = get(conn, Routes.auth_path(conn, :google_auth_callback), callback_params)
+
+      assert redirected_to(conn, 302) == Routes.auth_path(conn, :login_form)
+    end
+
+    test "success callback rejects state pointing to a site the current user does not own",
+         %{conn: conn} do
+      victim_site = new_site()
+
+      attacker = new_user()
+      {:ok, conn: attacker_conn} = log_in(%{user: attacker, conn: conn})
+
+      # craft a validly signed state pointing at the victim's site_id
+      state =
+        Phoenix.Token.sign(PlausibleWeb.Endpoint, "google-oauth-state", [
+          victim_site.id,
+          "search-console"
+        ])
+
+      callback_params = %{"code" => "CodeForToken", "state" => state}
+
+      attacker_conn =
+        get(attacker_conn, Routes.auth_path(conn, :google_auth_callback), callback_params)
+
+      assert redirected_to(attacker_conn, 302) == Routes.auth_path(conn, :login_form)
+
+      # confirm no GoogleAuth record was created for the victim's site
+      refute Repo.exists?(
+               from ga in Plausible.Site.GoogleAuth, where: ga.site_id == ^victim_site.id
+             )
+    end
+
+    test "success callback for import redirects to property selection", %{conn: conn, user: user} do
+      mock_google_access_token(user.email)
+
+      site = new_site(owner: user)
+
+      state =
+        Phoenix.Token.sign(PlausibleWeb.Endpoint, "google-oauth-state", [site.id, "import"])
+
+      callback_params = %{"code" => "CodeForToken", "state" => state}
+      conn = get(conn, Routes.auth_path(conn, :google_auth_callback), callback_params)
+
+      assert redirect_url = redirected_to(conn, 302)
+
+      assert redirect_url =~ "/import/google-analytics/property"
+      assert redirect_url =~ "access_token=SomeAccessToken"
+      assert redirect_url =~ "refresh_token=SomeRefreshToken"
+      assert redirect_url =~ "expires_at="
+    end
+
+    test "success callback for search console creates a google auth entry and redirects to integrations form",
+         %{conn: conn, user: user} do
+      site = new_site(owner: user)
+
+      mock_google_access_token(user.email)
+
+      state =
+        Phoenix.Token.sign(PlausibleWeb.Endpoint, "google-oauth-state", [
+          site.id,
+          "search-console"
+        ])
+
+      callback_params = %{"code" => "CodeForToken", "state" => state}
+      conn = get(conn, Routes.auth_path(conn, :google_auth_callback), callback_params)
+
+      assert redirected_to(conn, 302) ==
+               Routes.site_path(conn, :settings_integrations, site.domain)
+
+      assert_matches %{
+                       access_token: "SomeAccessToken",
+                       refresh_token: "SomeRefreshToken",
+                       user_id: ^user.id,
+                       email: ^user.email,
+                       expires: %NaiveDateTime{}
+                     } =
+                       Repo.one(
+                         from ga in Plausible.Site.GoogleAuth, where: ga.site_id == ^site.id
+                       )
+    end
+
+    test "success callback for search console creates a google auth entry and redirects to integrations form for editor",
+         %{conn: conn, user: user} do
+      site = new_site()
+      add_guest(site, user: user, role: :editor)
+
+      mock_google_access_token(user.email)
+
+      state =
+        Phoenix.Token.sign(PlausibleWeb.Endpoint, "google-oauth-state", [
+          site.id,
+          "search-console"
+        ])
+
+      callback_params = %{"code" => "CodeForToken", "state" => state}
+      conn = get(conn, Routes.auth_path(conn, :google_auth_callback), callback_params)
+
+      assert redirected_to(conn, 302) ==
+               Routes.site_path(conn, :settings_integrations, site.domain)
+
+      assert_matches %{
+                       access_token: "SomeAccessToken",
+                       refresh_token: "SomeRefreshToken",
+                       user_id: ^user.id,
+                       email: ^user.email,
+                       expires: %NaiveDateTime{}
+                     } =
+                       Repo.one(
+                         from ga in Plausible.Site.GoogleAuth, where: ga.site_id == ^site.id
+                       )
+    end
+
+    test "success callback for search console handles repeat callback for the same site gracefully",
+         %{conn: conn, user: user} do
+      site = new_site(owner: user)
+      another_email = new_user().email
+
+      mock_google_access_token(user.email)
+      mock_google_access_token(another_email)
+
+      state =
+        Phoenix.Token.sign(PlausibleWeb.Endpoint, "google-oauth-state", [
+          site.id,
+          "search-console"
+        ])
+
+      callback_params = %{"code" => "CodeForToken", "state" => state}
+      conn_first = get(conn, Routes.auth_path(conn, :google_auth_callback), callback_params)
+
+      assert redirected_to(conn_first, 302) ==
+               Routes.site_path(conn, :settings_integrations, site.domain)
+
+      assert_matches %{
+                       access_token: "SomeAccessToken",
+                       refresh_token: "SomeRefreshToken",
+                       user_id: ^user.id,
+                       email: ^user.email,
+                       expires: %NaiveDateTime{}
+                     } =
+                       Repo.one(
+                         from ga in Plausible.Site.GoogleAuth, where: ga.site_id == ^site.id
+                       )
+
+      conn_second = get(conn, Routes.auth_path(conn, :google_auth_callback), callback_params)
+
+      assert redirected_to(conn_second, 302) ==
+               Routes.site_path(conn, :settings_integrations, site.domain)
+
+      assert_matches %{
+                       access_token: "SomeAccessToken",
+                       refresh_token: "SomeRefreshToken",
+                       user_id: ^user.id,
+                       email: ^another_email,
+                       expires: %NaiveDateTime{}
+                     } =
+                       Repo.one(
+                         from ga in Plausible.Site.GoogleAuth, where: ga.site_id == ^site.id
+                       )
     end
   end
 
@@ -1759,48 +2095,6 @@ defmodule PlausibleWeb.AuthControllerTest do
     end
   end
 
-  describe "GET /team/select" do
-    setup [:create_user, :log_in]
-
-    test "redirects to /sites if no teams available", %{conn: conn} do
-      conn = get(conn, Routes.auth_path(conn, :select_team))
-      assert redirected_to(conn, 302) == Routes.site_path(conn, :index)
-    end
-
-    test "redirects to /sites?__team if one team set up available", %{conn: conn, user: user} do
-      new_site(owner: user)
-      team = team_of(user)
-      assert Plausible.Teams.complete_setup(team)
-      conn = get(conn, Routes.auth_path(conn, :select_team))
-      assert redirected_to(conn, 302) == Routes.site_path(conn, :index, __team: team.identifier)
-    end
-
-    test "displays team switcher if >1 teams available", %{conn: conn, user: user} do
-      t1 = new_site(owner: user).team
-      t2 = new_site().team
-
-      add_member(t2, user: user, role: :viewer)
-
-      Plausible.Teams.complete_setup(t1)
-      Plausible.Teams.complete_setup(t2)
-
-      conn = get(conn, Routes.auth_path(conn, :select_team))
-      assert html = html_response(conn, 200)
-
-      assert text(html) =~ "Switch your current team"
-
-      assert element_exists?(
-               html,
-               ~s|a[href="#{Routes.site_path(conn, :index, __team: t1.identifier)}"]|
-             )
-
-      assert element_exists?(
-               html,
-               ~s|a[href="#{Routes.site_path(conn, :index, __team: t2.identifier)}"]|
-             )
-    end
-  end
-
   defp login_with_cookie(conn, email, password) do
     conn
     |> post(Routes.auth_path(conn, :login), %{
@@ -1808,16 +2102,14 @@ defmodule PlausibleWeb.AuthControllerTest do
       password: password
     })
     |> recycle()
-    |> Map.put(:secret_key_base, secret_key_base())
-    |> Plug.Conn.put_req_header("x-forwarded-for", random_ip())
+    |> prepare_conn()
   end
 
   defp set_remember_2fa_cookie(conn, user) do
     conn
     |> PlausibleWeb.TwoFactor.Session.maybe_set_remember_2fa(user, "true")
     |> recycle()
-    |> Map.put(:secret_key_base, secret_key_base())
-    |> Plug.Conn.put_req_header("x-forwarded-for", random_ip())
+    |> prepare_conn()
   end
 
   defp mock_captcha_success() do
@@ -1843,9 +2135,28 @@ defmodule PlausibleWeb.AuthControllerTest do
     )
   end
 
-  defp secret_key_base() do
-    :plausible
-    |> Application.fetch_env!(PlausibleWeb.Endpoint)
-    |> Keyword.fetch!(:secret_key_base)
+  defp mock_google_access_token(email) do
+    body =
+      %{"email" => email}
+      |> Jason.encode!()
+      |> Base.encode64(padding: false)
+
+    expect(
+      Plausible.HTTPClient.Mock,
+      :post,
+      fn _, _, _ ->
+        {:ok,
+         %Finch.Response{
+           status: 200,
+           headers: [{"content-type", "application/json"}],
+           body: %{
+             "expires_in" => 3600,
+             "access_token" => "SomeAccessToken",
+             "refresh_token" => "SomeRefreshToken",
+             "id_token" => ".#{body}."
+           }
+         }}
+      end
+    )
   end
 end

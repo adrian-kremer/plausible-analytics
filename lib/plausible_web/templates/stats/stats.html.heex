@@ -11,7 +11,6 @@
     </div>
   <% end %>
 
-  <div class="pt-6"></div>
   <div
     id="stats-react-container"
     style="overflow-anchor: none;"
@@ -39,46 +38,49 @@
     data-shared-link-auth={assigns[:shared_link_auth]}
     data-embedded={to_string(@conn.assigns[:embedded])}
     data-background={@conn.assigns[:background]}
-    data-is-dbip={to_string(@is_dbip)}
+    data-is-dbip={to_string(@dbip?)}
     data-current-user-role={@site_role}
     data-current-user-id={
       if user = @conn.assigns[:current_user], do: user.id, else: Jason.encode!(nil)
     }
     data-flags={Jason.encode!(@flags)}
     data-segments={Jason.encode!(@segments)}
-    data-valid-intervals-by-period={
-      Plausible.Stats.Interval.valid_by_period(site: @site) |> Jason.encode!()
-    }
     data-is-consolidated-view={Jason.encode!(@consolidated_view?)}
     data-consolidated-view-available={Jason.encode!(@consolidated_view_available?)}
+    data-exploration-available={
+      to_string(Plausible.Billing.Feature.Funnels.check_availability(@site.team) == :ok)
+    }
+    data-exploration-journey-end-event={@exploration_journey_end_event}
+    data-exploration-max-journey-steps={@exploration_max_journey_steps}
     data-team-identifier={@team_identifier}
+    data-limited-to-segment-id={Jason.encode!(@limited_to_segment_id)}
   >
   </div>
   <div id="modal_root"></div>
-  <%= if !@conn.assigns[:current_user] && @conn.assigns[:demo] do %>
-    <div class="bg-gray-50 dark:bg-gray-850">
-      <div class="py-12 lg:py-16 lg:flex lg:items-center lg:justify-between">
-        <h2 class="text-3xl font-extrabold tracking-tight text-gray-900 leading-9 sm:text-4xl sm:leading-10 dark:text-gray-100">
-          Want these stats for your website? <br />
-          <span class="text-indigo-600">Start your free trial today.</span>
-        </h2>
-        <div class="flex mt-8 lg:shrink-0 lg:mt-0">
-          <div class="inline-flex shadow-sm rounded-md">
-            <a
-              href="/register"
-              class="inline-flex items-center justify-center px-5 py-3 text-base font-medium text-white bg-indigo-600 border border-transparent leading-6 rounded-md hover:bg-indigo-500 focus:outline-hidden focus:ring transition duration-150 ease-in-out"
-            >
-              Get started
-            </a>
-          </div>
-          <div class="inline-flex ml-3 shadow-xs rounded-md">
-            <a
-              href="/"
-              class="inline-flex items-center justify-center px-5 py-3 text-base font-medium text-indigo-600 bg-white border border-transparent leading-6 rounded-md dark:text-gray-100 dark:bg-gray-800 hover:text-indigo-500 dark:hover:text-indigo-500 focus:outline-hidden focus:ring transition duration-150 ease-in-out"
-            >
-              Learn more
-            </a>
-          </div>
+  <%= if ee?() && !@conn.assigns[:current_user] && @conn.assigns[:demo] do %>
+    <div class="py-12 lg:py-16 lg:flex lg:items-center lg:justify-between">
+      <h2 class="text-3xl font-extrabold tracking-tight text-gray-900 leading-9 sm:text-4xl sm:leading-10 dark:text-gray-100">
+        You just saw how Plausible tracks plausible.io <br />
+        <span class="text-indigo-600">No cookies, no personal data, no Google</span>
+      </h2>
+      <div class="flex mt-8 lg:shrink-0 lg:mt-0">
+        <div class="inline-flex shadow-sm rounded-md">
+          <a
+            href="/register"
+            onclick="plausible('CTA Click', {props: {position: 'Bottom', type: 'Live demo', button: 'Start free trial'}})"
+            class="inline-flex items-center justify-center px-5 py-3 text-base font-medium text-white bg-indigo-600 border border-transparent leading-6 rounded-md hover:bg-indigo-500 focus:outline-hidden focus:ring transition duration-150 ease-in-out"
+          >
+            Start free trial
+          </a>
+        </div>
+        <div class="inline-flex ml-3 shadow-xs rounded-md">
+          <a
+            href="/#pricing"
+            onclick="plausible('CTA Click', {props: {position: 'Bottom', type: 'Live demo', button: 'See pricing'}})"
+            class="inline-flex items-center justify-center px-5 py-3 text-base font-medium text-indigo-600 bg-white border border-transparent leading-6 rounded-md dark:text-gray-100 dark:bg-gray-800 hover:text-indigo-500 dark:hover:text-indigo-500 focus:outline-hidden focus:ring transition duration-150 ease-in-out"
+          >
+            See pricing
+          </a>
         </div>
       </div>
     </div>

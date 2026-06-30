@@ -131,7 +131,6 @@ defmodule PlausibleWeb.Api.ExternalSitesControllerTest do
         subscribe_to_enterprise_plan(user,
           features: [
             Plausible.Billing.Feature.SharedLinks,
-            Plausible.Billing.Feature.StatsAPI,
             Plausible.Billing.Feature.SitesAPI
           ]
         )
@@ -212,7 +211,9 @@ defmodule PlausibleWeb.Api.ExternalSitesControllerTest do
           })
 
         res = json_response(conn, 400)
-        assert res["error"] == "Parameter `site_id` is required to create a shared link"
+
+        assert res["error"] ==
+                 "Missing site ID. Please provide the required site_id parameter with your request."
       end
 
       test "returns 404 when site id is non existent", %{conn: conn} do
@@ -286,7 +287,6 @@ defmodule PlausibleWeb.Api.ExternalSitesControllerTest do
         subscribe_to_enterprise_plan(user,
           features: [
             Plausible.Billing.Feature.Props,
-            Plausible.Billing.Feature.StatsAPI,
             Plausible.Billing.Feature.SitesAPI
           ]
         )
@@ -400,7 +400,9 @@ defmodule PlausibleWeb.Api.ExternalSitesControllerTest do
           })
 
         res = json_response(conn, 400)
-        assert res["error"] == "Parameter `site_id` is required to create a custom property"
+
+        assert res["error"] ==
+                 "Missing site ID. Please provide the required site_id parameter with your request."
       end
 
       test "returns 404 when site id is non existent", %{conn: conn} do
@@ -449,7 +451,7 @@ defmodule PlausibleWeb.Api.ExternalSitesControllerTest do
 
       setup %{user: user} do
         subscribe_to_enterprise_plan(user,
-          features: [Plausible.Billing.Feature.StatsAPI, Plausible.Billing.Feature.SitesAPI]
+          features: [Plausible.Billing.Feature.SitesAPI]
         )
 
         :ok
@@ -463,12 +465,17 @@ defmodule PlausibleWeb.Api.ExternalSitesControllerTest do
             event_name: "Signup"
           })
 
-        res = json_response(conn, 200)
+        resp = json_response(conn, 200)
 
-        assert res["goal_type"] == "event"
-        assert res["display_name"] == "Signup"
-        assert res["event_name"] == "Signup"
-        assert res["domain"] == site.domain
+        assert_matches ^strict_map(%{
+                         "custom_props" => ^strict_map(%{}),
+                         "display_name" => "Signup",
+                         "domain" => ^site.domain,
+                         "event_name" => "Signup",
+                         "goal_type" => "event",
+                         "id" => ^any(:integer),
+                         "page_path" => nil
+                       }) = resp
       end
 
       test "can add a goal as page to a site", %{conn: conn, site: site} do
@@ -479,11 +486,17 @@ defmodule PlausibleWeb.Api.ExternalSitesControllerTest do
             page_path: "/signup"
           })
 
-        res = json_response(conn, 200)
-        assert res["goal_type"] == "page"
-        assert res["page_path"] == "/signup"
-        assert res["display_name"] == "Visit /signup"
-        assert res["domain"] == site.domain
+        resp = json_response(conn, 200)
+
+        assert_matches ^strict_map(%{
+                         "custom_props" => ^strict_map(%{}),
+                         "display_name" => "Visit /signup",
+                         "domain" => ^site.domain,
+                         "event_name" => nil,
+                         "goal_type" => "page",
+                         "id" => ^any(:integer),
+                         "page_path" => "/signup"
+                       }) = resp
       end
 
       test "can add a goal using old site_id after domain change", %{conn: conn, site: site} do
@@ -583,7 +596,9 @@ defmodule PlausibleWeb.Api.ExternalSitesControllerTest do
           })
 
         res = json_response(conn, 400)
-        assert res["error"] == "Parameter `site_id` is required to create a goal"
+
+        assert res["error"] ==
+                 "Missing site ID. Please provide the required site_id parameter with your request."
       end
 
       test "returns 404 when site id is non existent", %{conn: conn} do
@@ -650,6 +665,117 @@ defmodule PlausibleWeb.Api.ExternalSitesControllerTest do
         res = json_response(conn, 400)
         assert res["error"] == "Parameter `page_path` is required to create a goal"
       end
+
+      test "fails when max goals per site limit reached", %{conn: conn, site: site} do
+        for i <- 1..10, do: {:ok, _} = Plausible.Goals.create(site, %{"event_name" => "G#{i}"})
+
+        conn =
+          put(conn, "/api/v1/sites/goals", %{
+            site_id: site.domain,
+            goal_type: "event",
+            event_name: "Signup"
+          })
+
+        res = json_response(conn, 400)
+
+        assert res["error"] =~ "Maximum number of goals reached"
+      end
+
+      test "can create a goal with custom_props", %{conn: conn, site: site, user: user} do
+        subscribe_to_enterprise_plan(user,
+          features: [Plausible.Billing.Feature.SitesAPI, Plausible.Billing.Feature.Props]
+        )
+
+        conn =
+          put(conn, "/api/v1/sites/goals", %{
+            site_id: site.domain,
+            goal_type: "event",
+            event_name: "Purchase",
+            custom_props: %{"product" => "enterprise", "tier" => "premium"}
+          })
+
+        res = json_response(conn, 200)
+        assert res["goal_type"] == "event"
+        assert res["event_name"] == "Purchase"
+        assert res["custom_props"] == %{"product" => "enterprise", "tier" => "premium"}
+      end
+
+      test "custom_props defaults to empty map if not provided", %{conn: conn, site: site} do
+        conn =
+          put(conn, "/api/v1/sites/goals", %{
+            site_id: site.domain,
+            goal_type: "event",
+            event_name: "Signup"
+          })
+
+        res = json_response(conn, 200)
+        assert res["custom_props"] == %{}
+      end
+
+      test "fails when custom_props exceeds max of 3", %{conn: conn, site: site, user: user} do
+        subscribe_to_enterprise_plan(user,
+          features: [Plausible.Billing.Feature.SitesAPI, Plausible.Billing.Feature.Props]
+        )
+
+        conn =
+          put(conn, "/api/v1/sites/goals", %{
+            site_id: site.domain,
+            goal_type: "event",
+            event_name: "Purchase",
+            custom_props: %{"a" => "1", "b" => "2", "c" => "3", "d" => "4"}
+          })
+
+        res = json_response(conn, 400)
+        assert res["error"] =~ "use at most 3 properties per goal"
+      end
+
+      test "fails when custom_props has null values", %{conn: conn, site: site, user: user} do
+        subscribe_to_enterprise_plan(user,
+          features: [Plausible.Billing.Feature.SitesAPI, Plausible.Billing.Feature.Props]
+        )
+
+        conn =
+          put(conn, "/api/v1/sites/goals", %{
+            site_id: site.domain,
+            goal_type: "event",
+            event_name: "Purchase",
+            custom_props: %{"product" => nil}
+          })
+
+        res = json_response(conn, 400)
+        assert res["error"] =~ "must be a map with string keys and string values"
+      end
+
+      test "fails when custom_props has non-string values", %{conn: conn, site: site, user: user} do
+        subscribe_to_enterprise_plan(user,
+          features: [Plausible.Billing.Feature.SitesAPI, Plausible.Billing.Feature.Props]
+        )
+
+        conn =
+          put(conn, "/api/v1/sites/goals", %{
+            site_id: site.domain,
+            goal_type: "event",
+            event_name: "Purchase",
+            custom_props: %{"count" => 42}
+          })
+
+        res = json_response(conn, 400)
+        assert res["error"] =~ "must be a map with string keys and string values"
+      end
+
+      @tag :ee_only
+      test "fails without Props feature when custom_props is non-empty", %{conn: conn, site: site} do
+        conn =
+          put(conn, "/api/v1/sites/goals", %{
+            site_id: site.domain,
+            goal_type: "event",
+            event_name: "Purchase",
+            custom_props: %{"product" => "enterprise"}
+          })
+
+        res = json_response(conn, 402)
+        assert res["error"] == "Your current subscription plan does not include Custom Properties"
+      end
     end
 
     describe "DELETE /api/v1/sites/custom-props/:property" do
@@ -659,7 +785,6 @@ defmodule PlausibleWeb.Api.ExternalSitesControllerTest do
         subscribe_to_enterprise_plan(user,
           features: [
             Plausible.Billing.Feature.Props,
-            Plausible.Billing.Feature.StatsAPI,
             Plausible.Billing.Feature.SitesAPI
           ]
         )
@@ -806,7 +931,6 @@ defmodule PlausibleWeb.Api.ExternalSitesControllerTest do
       setup %{user: user} do
         subscribe_to_enterprise_plan(user,
           features: [
-            Plausible.Billing.Feature.StatsAPI,
             Plausible.Billing.Feature.SitesAPI
           ]
         )
@@ -1033,7 +1157,6 @@ defmodule PlausibleWeb.Api.ExternalSitesControllerTest do
       setup %{user: user} do
         subscribe_to_enterprise_plan(user,
           features: [
-            Plausible.Billing.Feature.StatsAPI,
             Plausible.Billing.Feature.SitesAPI
           ]
         )
@@ -1150,7 +1273,7 @@ defmodule PlausibleWeb.Api.ExternalSitesControllerTest do
     describe "DELETE /api/v1/sites/guests" do
       setup %{user: user} do
         subscribe_to_enterprise_plan(user,
-          features: [Plausible.Billing.Feature.StatsAPI, Plausible.Billing.Feature.SitesAPI]
+          features: [Plausible.Billing.Feature.SitesAPI]
         )
 
         :ok
@@ -1308,7 +1431,8 @@ defmodule PlausibleWeb.Api.ExternalSitesControllerTest do
         conn = get(conn, "/api/v1/sites/custom-props")
 
         assert json_response(conn, 400) == %{
-                 "error" => "Parameter `site_id` is required to list custom properties"
+                 "error" =>
+                   "Missing site ID. Please provide the required site_id parameter with your request."
                }
       end
 
@@ -1361,21 +1485,24 @@ defmodule PlausibleWeb.Api.ExternalSitesControllerTest do
                      "display_name" => "Purchase",
                      "goal_type" => "event",
                      "event_name" => "Purchase",
-                     "page_path" => nil
+                     "page_path" => nil,
+                     "custom_props" => %{}
                    },
                    %{
                      "id" => goal2.id,
                      "display_name" => "Signup",
                      "goal_type" => "event",
                      "event_name" => "Signup",
-                     "page_path" => nil
+                     "page_path" => nil,
+                     "custom_props" => %{}
                    },
                    %{
                      "id" => goal1.id,
                      "display_name" => "Visit /login",
                      "goal_type" => "page",
                      "event_name" => nil,
-                     "page_path" => "/login"
+                     "page_path" => "/login",
+                     "custom_props" => %{}
                    }
                  ],
                  "meta" => %{
@@ -1384,6 +1511,28 @@ defmodule PlausibleWeb.Api.ExternalSitesControllerTest do
                    "limit" => 100
                  }
                }
+      end
+
+      test "returns goals with custom_props", %{conn: conn, site: site} do
+        goal =
+          insert(:goal, %{
+            site: site,
+            event_name: "Purchase",
+            custom_props: %{"product" => "enterprise", "tier" => "premium"}
+          })
+
+        conn = get(conn, "/api/v1/sites/goals?site_id=" <> site.domain)
+
+        goal_id = goal.id
+
+        assert %{
+                 "goals" => [
+                   %{
+                     "id" => ^goal_id,
+                     "custom_props" => %{"product" => "enterprise", "tier" => "premium"}
+                   }
+                 ]
+               } = json_response(conn, 200)
       end
 
       @tag :capture_log
@@ -1467,7 +1616,8 @@ defmodule PlausibleWeb.Api.ExternalSitesControllerTest do
         conn = get(conn, "/api/v1/sites/goals")
 
         assert json_response(conn, 400) == %{
-                 "error" => "Parameter `site_id` is required to list goals"
+                 "error" =>
+                   "Missing site ID. Please provide the required site_id parameter with your request."
                }
       end
 

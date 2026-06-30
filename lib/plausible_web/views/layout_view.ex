@@ -6,6 +6,8 @@ defmodule PlausibleWeb.LayoutView do
   alias PlausibleWeb.Components.Billing.Notice
   alias PlausibleWeb.Components.Layout
 
+  require Plausible.Billing
+
   def plausible_url do
     PlausibleWeb.Endpoint.url()
   end
@@ -68,7 +70,7 @@ defmodule PlausibleWeb.LayoutView do
           %{key: "Funnels", value: "funnels", icon: :funnel}
         end
       end,
-      %{key: "Custom properties", value: "properties", icon: :document_text},
+      %{key: "Custom properties", value: "properties", icon: :tag},
       if regular_site? do
         %{key: "Integrations", value: "integrations", icon: :puzzle_piece}
       end,
@@ -95,12 +97,9 @@ defmodule PlausibleWeb.LayoutView do
     |> Enum.reject(&is_nil/1)
   end
 
-  def account_settings_sidebar(conn) do
-    current_team = conn.assigns[:current_team]
-    current_team_role = conn.assigns[:current_team_role]
-
-    # NOTE: Subscription will still exist if it has expired or cancelled
-    subscription? = !!(conn.assigns[:current_team] && conn.assigns.current_team.subscription)
+  def account_settings_sidebar(assigns) do
+    current_team = assigns.current_team
+    current_team_role = assigns.current_team_role
 
     options = %{
       "Account" =>
@@ -108,15 +107,12 @@ defmodule PlausibleWeb.LayoutView do
           %{key: "Allgemeine Einstellungen", value: "preferences", icon: :cog_6_tooth},
           %{key: "Sicherheit", value: "security", icon: :lock_closed},
           if(ee?() and not Teams.setup?(current_team),
-            do: %{key: "Subscription", value: "billing/subscription", icon: :circle_stack}
-          ),
-          if(ee?() and not Teams.setup?(current_team) and subscription?,
-            do: %{key: "Invoices", value: "billing/invoices", icon: :banknotes}
+            do: %{key: "Subscription", value: "billing/subscription", icon: :subscription}
           ),
           if(not Teams.setup?(current_team),
-            do: %{key: "API keys", value: "api-keys", icon: :key}
+            do: %{key: "API keys", value: "api-keys", icon: :api_keys}
           ),
-          if(Plausible.Users.type(conn.assigns.current_user) == :standard,
+          if(Plausible.Users.type(assigns.current_user) == :standard,
             do: %{key: "Gefahrenzone", value: "danger-zone", icon: :exclamation_triangle}
           )
         ]
@@ -129,14 +125,11 @@ defmodule PlausibleWeb.LayoutView do
         "Team",
         [
           %{key: "General", value: "team/general", icon: :adjustments_horizontal},
-          if(ee?() and current_team_role in [:owner, :billing],
-            do: %{key: "Subscription", value: "billing/subscription", icon: :circle_stack}
-          ),
-          if(ee?() and current_team_role in [:owner, :billing] and subscription?,
-            do: %{key: "Invoices", value: "billing/invoices", icon: :banknotes}
+          if(ee?() and current_team_role in Plausible.Billing.allowed_roles(),
+            do: %{key: "Subscription", value: "billing/subscription", icon: :subscription}
           ),
           if(current_team_role in [:owner, :billing, :admin, :editor],
-            do: %{key: "API keys", value: "api-keys", icon: :key}
+            do: %{key: "API keys", value: "api-keys", icon: :api_keys}
           ),
           if(
             ee?() and current_team_role == :owner and
@@ -173,7 +166,6 @@ defmodule PlausibleWeb.LayoutView do
   attr :teams, :list, required: true
   attr :my_team, :any, default: nil
   attr :current_team, :any, default: nil
-  attr :more_teams?, :boolean, required: true
 
   def team_switcher(assigns) do
     teams = assigns[:teams]
@@ -199,36 +191,41 @@ defmodule PlausibleWeb.LayoutView do
         end
 
       selected_id = current_team && current_team.id
+      {pinned_team, other_teams} = Enum.split_with(teams, &(&1.id == selected_id))
 
       assigns =
         assigns
-        |> assign(:teams, teams)
-        |> assign(:selected_id, selected_id)
+        |> assign(:pinned_team, List.first(pinned_team))
+        |> assign(:other_teams, other_teams)
 
       ~H"""
       <.dropdown_item>
         <div class="text-xs text-gray-500 dark:text-gray-400">Teams</div>
       </.dropdown_item>
       <.dropdown_item
-        :for={team <- @teams}
-        href={Routes.site_path(@conn, :index, __team: team.identifier)}
+        :if={@pinned_team}
+        href={Routes.site_path(@conn, :index, __team: @pinned_team.identifier)}
       >
-        <p
-          class={[
-            if(team.id == @selected_id,
-              do: "border-r-4 border-indigo-400 font-bold",
-              else: "font-medium"
-            ),
-            "truncate text-gray-900 dark:text-gray-100 pr-4"
-          ]}
-          role="none"
+        <div class="flex items-center justify-between gap-2" role="none">
+          <p class="font-semibold truncate min-w-0 text-gray-900 dark:text-gray-100">
+            {Teams.name(@pinned_team)}
+          </p>
+          <Heroicons.check class="size-4 shrink-0 stroke-2 text-gray-500 dark:text-gray-400" />
+        </div>
+      </.dropdown_item>
+      <div class="max-h-[200px] overflow-y-auto">
+        <.dropdown_item
+          :for={team <- @other_teams}
+          href={Routes.site_path(@conn, :index, __team: team.identifier)}
         >
-          {Teams.name(team)}
-        </p>
-      </.dropdown_item>
-      <.dropdown_item :if={@more_teams?} href={Routes.auth_path(@conn, :select_team)}>
-        Switch to Another Team
-      </.dropdown_item>
+          <p
+            class="font-medium truncate text-gray-900 dark:text-gray-100 pr-4"
+            role="none"
+          >
+            {Teams.name(team)}
+          </p>
+        </.dropdown_item>
+      </div>
       """
     else
       ~H""
@@ -248,26 +245,20 @@ defmodule PlausibleWeb.LayoutView do
     end
   end
 
-  def grace_period_end(%{grace_period: %{end_date: %Date{} = date}}) do
-    case Date.diff(date, Date.utc_today()) do
-      0 -> "today"
-      1 -> "tomorrow"
-      n -> "within #{n} days"
-    end
-  end
-
-  def grace_period_end(_user), do: "in the following days"
-
   @doc "http://blog.plataformatec.com.br/2018/05/nested-layouts-with-phoenix/"
   def render_layout(layout, assigns, do: content) do
     render(layout, Map.put(assigns, :inner_layout, content))
   end
 
-  def is_current_tab(_, nil) do
+  def current_tab?(_, nil) do
     false
   end
 
-  def is_current_tab(conn, tab) do
+  def current_tab?(path, tab) when is_binary(path) do
+    String.ends_with?(path, tab)
+  end
+
+  def current_tab?(conn, tab) do
     full_path = Path.join(conn.path_info)
 
     one_up =

@@ -3,6 +3,34 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
 
   @user_id Enum.random(1000..9999)
 
+  @default_metrics ["visitors", "percentage"]
+  @detailed_metrics [
+    "visitors",
+    "pageviews",
+    "bounce_rate",
+    "time_on_page",
+    "scroll_depth",
+    "percentage"
+  ]
+  @goal_filter_metrics ["visitors", "group_conversion_rate", "total_visitors"]
+
+  defp query_pages(conn, site, opts) do
+    params = %{
+      "dimensions" => Keyword.get(opts, :dimensions, ["event:page"]),
+      "date_range" => Keyword.get(opts, :date_range, "all"),
+      "relative_date" => Keyword.get(opts, :relative_date, nil),
+      "filters" => Keyword.get(opts, :filters, []),
+      "metrics" => Keyword.get(opts, :metrics, @default_metrics),
+      "include" => Keyword.get(opts, :include, nil),
+      "pagination" => Keyword.get(opts, :pagination, nil),
+      "order_by" => Keyword.get(opts, :order_by, nil)
+    }
+
+    conn
+    |> post("/api/stats/#{site.domain}/query", params)
+    |> json_response(200)
+  end
+
   describe "GET /api/stats/:domain/pages" do
     setup [
       :create_user,
@@ -21,16 +49,16 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         build(:pageview, pathname: "/contact")
       ])
 
-      conn = get(conn, "/api/stats/#{site.domain}/pages?period=day")
+      response = query_pages(conn, site, date_range: "day")
 
-      assert json_response(conn, 200)["results"] == [
-               %{"visitors" => 3, "name" => "/"},
-               %{"visitors" => 2, "name" => "/register"},
-               %{"visitors" => 1, "name" => "/contact"}
+      assert response["results"] == [
+               %{"dimensions" => ["/"], "metrics" => [3, 50.0]},
+               %{"dimensions" => ["/register"], "metrics" => [2, 33.33]},
+               %{"dimensions" => ["/contact"], "metrics" => [1, 16.67]}
              ]
     end
 
-    test "returns top pages by visitors by hostname", %{conn: conn1, site: site} do
+    test "returns top pages by visitors by hostname", %{conn: conn, site: site} do
       populate_stats(site, [
         build(:pageview, pathname: "/", hostname: "a.example.com"),
         build(:pageview, pathname: "/", hostname: "b.example.com"),
@@ -42,22 +70,93 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         build(:pageview, pathname: "/contact", hostname: "e.example.com")
       ])
 
-      filters = Jason.encode!([[:contains, "event:hostname", [".example.com"]]])
-      conn = get(conn1, "/api/stats/#{site.domain}/pages?period=day&filters=#{filters}")
+      response =
+        query_pages(conn, site,
+          date_range: "day",
+          filters: [["contains", "event:hostname", [".example.com"]]],
+          order_by: [["visitors", "desc"], ["event:page", "asc"]]
+        )
 
-      assert json_response(conn, 200)["results"] == [
-               %{"visitors" => 3, "name" => "/"},
-               %{"visitors" => 2, "name" => "/register"},
-               %{"visitors" => 1, "name" => "/contact"},
-               %{"visitors" => 1, "name" => "/landing"}
+      assert response["results"] == [
+               %{"dimensions" => ["/"], "metrics" => [3, 50.0]},
+               %{"dimensions" => ["/register"], "metrics" => [2, 33.33]},
+               %{"dimensions" => ["/contact"], "metrics" => [1, 16.67]},
+               %{"dimensions" => ["/landing"], "metrics" => [1, 16.67]}
              ]
 
-      filters = Jason.encode!([[:is, "event:hostname", ["d.example.com"]]])
-      conn = get(conn1, "/api/stats/#{site.domain}/pages?period=day&filters=#{filters}")
+      response =
+        query_pages(conn, site,
+          date_range: "day",
+          filters: [["is", "event:hostname", ["d.example.com"]]]
+        )
 
-      assert json_response(conn, 200)["results"] == [
-               %{"visitors" => 2, "name" => "/register"},
-               %{"visitors" => 1, "name" => "/"}
+      assert response["results"] == [
+               %{"dimensions" => ["/register"], "metrics" => [2, 66.67]},
+               %{"dimensions" => ["/"], "metrics" => [1, 33.33]}
+             ]
+    end
+
+    test "returns top pages broken down by hostname and page", %{conn: conn, site: site} do
+      populate_stats(site, [
+        build(:pageview, pathname: "/docs", hostname: "main.example.com"),
+        build(:pageview, pathname: "/docs", hostname: "main.example.com"),
+        build(:pageview, pathname: "/docs", hostname: "secondary.example.com")
+      ])
+
+      response =
+        query_pages(conn, site,
+          date_range: "day",
+          dimensions: ["event:hostname", "event:page"],
+          metrics: ["visitors", "bounce_rate"]
+        )
+
+      assert response["results"] == [
+               %{"dimensions" => ["main.example.com", "/docs"], "metrics" => [2, 100]},
+               %{"dimensions" => ["secondary.example.com", "/docs"], "metrics" => [1, 100]}
+             ]
+    end
+
+    test "correctly computes bounce_rate when broken down by hostname and page",
+         %{conn: conn, site: site} do
+      populate_stats(site, [
+        # 1: 2 pageviews on primary (no bounce)
+        build(:pageview,
+          pathname: "/docs",
+          hostname: "main.example.com",
+          user_id: 1,
+          timestamp: ~N[2021-01-01 00:00:00]
+        ),
+        build(:pageview,
+          pathname: "/docs",
+          hostname: "main.example.com",
+          user_id: 1,
+          timestamp: ~N[2021-01-01 00:01:00]
+        ),
+        # 2: single pageview on primary (bounce)
+        build(:pageview,
+          pathname: "/docs",
+          hostname: "main.example.com",
+          user_id: 2,
+          timestamp: ~N[2021-01-01 00:00:00]
+        ),
+        # 3: single pageview on secondary (bounce)
+        build(:pageview,
+          pathname: "/docs",
+          hostname: "secondary.example.com",
+          user_id: 3,
+          timestamp: ~N[2021-01-01 00:00:00]
+        )
+      ])
+
+      response =
+        query_pages(conn, site,
+          dimensions: ["event:hostname", "event:page"],
+          metrics: ["visitors", "bounce_rate"]
+        )
+
+      assert response["results"] == [
+               %{"dimensions" => ["main.example.com", "/docs"], "metrics" => [2, 50]},
+               %{"dimensions" => ["secondary.example.com", "/docs"], "metrics" => [1, 100]}
              ]
     end
 
@@ -76,11 +175,14 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         build(:pageview, user_id: 123, pathname: "/")
       ])
 
-      filters = Jason.encode!([[:is, "event:props:author", ["John Doe"]]])
-      conn = get(conn, "/api/stats/#{site.domain}/pages?period=day&filters=#{filters}")
+      response =
+        query_pages(conn, site,
+          date_range: "day",
+          filters: [["is", "event:props:author", ["John Doe"]]]
+        )
 
-      assert json_response(conn, 200)["results"] == [
-               %{"visitors" => 1, "name" => "/blog/john-1"}
+      assert response["results"] == [
+               %{"dimensions" => ["/blog/john-1"], "metrics" => [1, 100.0]}
              ]
     end
 
@@ -102,12 +204,15 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         build(:pageview, pathname: "/")
       ])
 
-      filters = Jason.encode!([[:is_not, "event:props:author", ["John Doe"]]])
-      conn = get(conn, "/api/stats/#{site.domain}/pages?period=day&filters=#{filters}")
+      response =
+        query_pages(conn, site,
+          date_range: "day",
+          filters: [["is_not", "event:props:author", ["John Doe"]]]
+        )
 
-      assert json_response(conn, 200)["results"] == [
-               %{"visitors" => 1, "name" => "/"},
-               %{"visitors" => 1, "name" => "/blog/other-post"}
+      assert response["results"] == [
+               %{"dimensions" => ["/"], "metrics" => [1, 50.0]},
+               %{"dimensions" => ["/blog/other-post"], "metrics" => [1, 50.0]}
              ]
     end
 
@@ -139,12 +244,16 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         build(:pageview, pathname: "/5")
       ])
 
-      filters = Jason.encode!([[:contains, "event:props:prop", ["bar"]]])
-      conn = get(conn, "/api/stats/#{site.domain}/pages?period=day&filters=#{filters}")
+      response =
+        query_pages(conn, site,
+          date_range: "day",
+          filters: [["contains", "event:props:prop", ["bar"]]],
+          order_by: [["visitors", "desc"], ["event:page", "asc"]]
+        )
 
-      assert json_response(conn, 200)["results"] == [
-               %{"visitors" => 1, "name" => "/1"},
-               %{"visitors" => 1, "name" => "/2"}
+      assert response["results"] == [
+               %{"dimensions" => ["/1"], "metrics" => [1, 50.0]},
+               %{"dimensions" => ["/2"], "metrics" => [1, 50.0]}
              ]
     end
 
@@ -181,13 +290,17 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      filters = Jason.encode!([[:contains, "event:props:prop", ["bar", "nea"]]])
-      conn = get(conn, "/api/stats/#{site.domain}/pages?period=day&filters=#{filters}")
+      response =
+        query_pages(conn, site,
+          date_range: "day",
+          filters: [["contains", "event:props:prop", ["bar", "nea"]]],
+          order_by: [["visitors", "desc"], ["event:page", "asc"]]
+        )
 
-      assert json_response(conn, 200)["results"] == [
-               %{"visitors" => 1, "name" => "/1"},
-               %{"visitors" => 1, "name" => "/2"},
-               %{"visitors" => 1, "name" => "/6"}
+      assert response["results"] == [
+               %{"dimensions" => ["/1"], "metrics" => [1, 33.33]},
+               %{"dimensions" => ["/2"], "metrics" => [1, 33.33]},
+               %{"dimensions" => ["/6"], "metrics" => [1, 33.33]}
              ]
     end
 
@@ -219,16 +332,17 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         build(:pageview, pathname: "/5")
       ])
 
-      filters =
-        Jason.encode!([
-          [:is, "event:props:prop", ["bar"]],
-          [:is, "event:props:number", ["1"]]
-        ])
+      response =
+        query_pages(conn, site,
+          date_range: "day",
+          filters: [
+            ["is", "event:props:prop", ["bar"]],
+            ["is", "event:props:number", ["1"]]
+          ]
+        )
 
-      conn = get(conn, "/api/stats/#{site.domain}/pages?period=day&filters=#{filters}")
-
-      assert json_response(conn, 200)["results"] == [
-               %{"visitors" => 1, "name" => "/1"}
+      assert response["results"] == [
+               %{"dimensions" => ["/1"], "metrics" => [1, 100.0]}
              ]
     end
 
@@ -304,31 +418,16 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      filters = Jason.encode!([[:is, "event:props:author", ["John Doe"]]])
-
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/pages?period=day&date=2021-01-01&filters=#{filters}&detailed=true"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          filters: [["is", "event:props:author", ["John Doe"]]],
+          metrics: @detailed_metrics
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "name" => "/blog/john-2",
-                 "visitors" => 2,
-                 "pageviews" => 2,
-                 "bounce_rate" => 0,
-                 "time_on_page" => 315,
-                 "scroll_depth" => 0
-               },
-               %{
-                 "name" => "/blog/john-1",
-                 "visitors" => 1,
-                 "pageviews" => 1,
-                 "bounce_rate" => 0,
-                 "time_on_page" => 60,
-                 "scroll_depth" => 0
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/blog/john-2"], "metrics" => [2, 2, 0, 315, 0, 100.0]},
+               %{"dimensions" => ["/blog/john-1"], "metrics" => [1, 1, 0, 60, 0, 50.0]}
              ]
     end
 
@@ -404,31 +503,16 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      filters = Jason.encode!([[:is_not, "event:props:author", ["John Doe"]]])
-
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/pages?period=day&date=2021-01-01&filters=#{filters}&detailed=true"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          filters: [["is_not", "event:props:author", ["John Doe"]]],
+          metrics: @detailed_metrics
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "name" => "/blog",
-                 "visitors" => 2,
-                 "pageviews" => 2,
-                 "bounce_rate" => 0,
-                 "time_on_page" => 120,
-                 "scroll_depth" => 0
-               },
-               %{
-                 "name" => "/blog/other-post",
-                 "visitors" => 1,
-                 "pageviews" => 1,
-                 "bounce_rate" => 0,
-                 "time_on_page" => 30,
-                 "scroll_depth" => 0
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/blog"], "metrics" => [2, 2, 0, 120, 0, 100.0]},
+               %{"dimensions" => ["/blog/other-post"], "metrics" => [1, 1, 0, 30, 0, 50.0]}
              ]
     end
 
@@ -485,31 +569,16 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      filters = Jason.encode!([[:is, "event:props:author", ["(none)"]]])
-
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/pages?period=day&date=2021-01-01&filters=#{filters}&detailed=true"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          filters: [["is", "event:props:author", ["(none)"]]],
+          metrics: @detailed_metrics
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "name" => "/blog",
-                 "visitors" => 2,
-                 "pageviews" => 2,
-                 "bounce_rate" => 50,
-                 "time_on_page" => 45,
-                 "scroll_depth" => 0
-               },
-               %{
-                 "name" => "/blog/other-post",
-                 "visitors" => 1,
-                 "pageviews" => 1,
-                 "bounce_rate" => 0,
-                 "time_on_page" => 30,
-                 "scroll_depth" => 0
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/blog"], "metrics" => [2, 2, 50, 45, 0, 100.0]},
+               %{"dimensions" => ["/blog/other-post"], "metrics" => [1, 1, 0, 30, 0, 50.0]}
              ]
     end
 
@@ -574,31 +643,16 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      filters = Jason.encode!([[:is_not, "event:props:author", ["(none)"]]])
-
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/pages?period=day&date=2021-01-01&filters=#{filters}&detailed=true"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          filters: [["is_not", "event:props:author", ["(none)"]]],
+          metrics: @detailed_metrics
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "name" => "/blog/other-post",
-                 "visitors" => 2,
-                 "pageviews" => 2,
-                 "bounce_rate" => 100,
-                 "time_on_page" => 30,
-                 "scroll_depth" => 0
-               },
-               %{
-                 "name" => "/blog/john-1",
-                 "visitors" => 1,
-                 "pageviews" => 1,
-                 "bounce_rate" => 0,
-                 "time_on_page" => 60,
-                 "scroll_depth" => 0
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/blog/other-post"], "metrics" => [2, 2, 100, 30, 0, 100.0]},
+               %{"dimensions" => ["/blog/john-1"], "metrics" => [1, 1, 0, 60, 0, 50.0]}
              ]
     end
 
@@ -637,17 +691,19 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      filters = Jason.encode!([[:is_not, "event:props:browser", ["Chrome", "Safari"]]])
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          filters: [["is_not", "event:props:browser", ["Chrome", "Safari"]]]
+        )
 
-      conn =
-        get(conn, "/api/stats/#{site.domain}/pages?period=day&date=2021-01-01&filters=#{filters}")
-
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "name" => "/firefox",
-                 "visitors" => 2
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/firefox"], "metrics" => [2, 100.0]}
              ]
+
+      assert %{
+               "date_range" => ["2021-01-01T00:00:00Z", "2021-01-01T23:59:59Z"]
+             } = response["query"]
     end
 
     test "returns top pages with :not_member filter on custom pageview props including (none) value",
@@ -677,16 +733,14 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      filters = Jason.encode!([[:is_not, "event:props:browser", ["Chrome", "(none)"]]])
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          filters: [["is_not", "event:props:browser", ["Chrome", "(none)"]]]
+        )
 
-      conn =
-        get(conn, "/api/stats/#{site.domain}/pages?period=day&date=2021-01-01&filters=#{filters}")
-
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "name" => "/safari",
-                 "visitors" => 1
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/safari"], "metrics" => [1, 100.0]}
              ]
     end
 
@@ -743,23 +797,15 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      filters = Jason.encode!([[:is, "event:page", ["/"]]])
-
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/pages?period=day&date=2021-01-01&filters=#{filters}&detailed=true"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          filters: [["is", "event:page", ["/"]]],
+          metrics: @detailed_metrics
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "name" => "/",
-                 "visitors" => 2,
-                 "pageviews" => 3,
-                 "bounce_rate" => 50,
-                 "time_on_page" => 90,
-                 "scroll_depth" => 0
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/"], "metrics" => [2, 3, 50, 90, 0, 100.0]}
              ]
     end
 
@@ -818,38 +864,30 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/pages?period=day&date=2020-01-01&detailed=true&order_by=#{Jason.encode!([["scroll_depth", "asc"]])}"
+      response =
+        query_pages(conn, site,
+          date_range: ["2020-01-01", "2020-01-01"],
+          metrics: @detailed_metrics,
+          order_by: [["scroll_depth", "asc"]]
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "name" => "/another",
-                 "visitors" => 2,
-                 "pageviews" => 2,
-                 "bounce_rate" => 0,
-                 "time_on_page" => 60,
-                 "scroll_depth" => 25
-               },
-               %{
-                 "name" => "/blog",
-                 "visitors" => 3,
-                 "pageviews" => 4,
-                 "bounce_rate" => 33,
-                 "time_on_page" => 80,
-                 "scroll_depth" => 60
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/another"], "metrics" => [2, 2, 0, 60, 25, 66.67]},
+               %{"dimensions" => ["/blog"], "metrics" => [3, 4, 33, 80, 60, 100.0]}
              ]
     end
 
     test "calculates scroll_depth from native and imported data combined", %{
       conn: conn,
-      site: site
+      site: site,
+      site_import: site_import
     } do
       populate_stats(site, [
-        build(:pageview, user_id: @user_id, pathname: "/blog", timestamp: ~N[2020-01-01 00:00:00]),
+        build(:pageview,
+          user_id: @user_id,
+          pathname: "/blog",
+          timestamp: ~N[2020-01-01 00:00:00]
+        ),
         build(:engagement,
           user_id: @user_id,
           pathname: "/blog",
@@ -869,27 +907,29 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/pages?period=day&date=2020-01-01&detailed=true&with_imported=true&order_by=#{Jason.encode!([["scroll_depth", "desc"]])}"
+      populate_stats(site, site_import.id, [
+        build(:imported_visitors, date: ~D[2020-01-01]),
+        build(:imported_visitors, date: ~D[2020-01-01]),
+        build(:imported_visitors, date: ~D[2020-01-01])
+      ])
+
+      response =
+        query_pages(conn, site,
+          date_range: ["2020-01-01", "2020-01-01"],
+          metrics: @detailed_metrics,
+          include: %{"imports" => true},
+          order_by: [["scroll_depth", "desc"]]
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "name" => "/blog",
-                 "visitors" => 4,
-                 "pageviews" => 4,
-                 "bounce_rate" => 100,
-                 "time_on_page" => 28,
-                 "scroll_depth" => 50
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/blog"], "metrics" => [4, 4, 100, 28, 50, 100.0]}
              ]
     end
 
     test "handles missing scroll_depth data from native and imported sources", %{
       conn: conn,
-      site: site
+      site: site,
+      site_import: site_import
     } do
       populate_stats(site, [
         build(:pageview,
@@ -938,37 +978,24 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/pages?period=day&date=2020-01-01&detailed=true&with_imported=true&order_by=#{Jason.encode!([["scroll_depth", "desc"]])}"
+      populate_stats(
+        site,
+        site_import.id,
+        for(_ <- 1..24, do: build(:imported_visitors, date: ~D[2020-01-01]))
+      )
+
+      response =
+        query_pages(conn, site,
+          date_range: ["2020-01-01", "2020-01-01"],
+          metrics: @detailed_metrics,
+          include: %{"imports" => true},
+          order_by: [["scroll_depth", "desc"]]
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "name" => "/native-and-imported",
-                 "visitors" => 5,
-                 "pageviews" => 5,
-                 "bounce_rate" => 0,
-                 "time_on_page" => 48,
-                 "scroll_depth" => 50
-               },
-               %{
-                 "name" => "/native-only",
-                 "visitors" => 1,
-                 "pageviews" => 1,
-                 "bounce_rate" => 0,
-                 "time_on_page" => 60,
-                 "scroll_depth" => 40
-               },
-               %{
-                 "name" => "/imported-only",
-                 "visitors" => 20,
-                 "pageviews" => 30,
-                 "bounce_rate" => 0,
-                 "time_on_page" => 30,
-                 "scroll_depth" => 10
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/native-and-imported"], "metrics" => [5, 5, 0, 48, 50, 20.0]},
+               %{"dimensions" => ["/native-only"], "metrics" => [1, 1, 0, 60, 40, 4.0]},
+               %{"dimensions" => ["/imported-only"], "metrics" => [20, 30, 0, 30, 10, 80.0]}
              ]
     end
 
@@ -1000,21 +1027,16 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/pages?period=7d&date=2020-01-02&detailed=true&with_imported=true"
+      response =
+        query_pages(conn, site,
+          date_range: "7d",
+          relative_date: "2020-01-02",
+          metrics: @detailed_metrics,
+          include: %{"imports" => true}
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "name" => "/blog",
-                 "visitors" => 110,
-                 "pageviews" => 160,
-                 "bounce_rate" => 0,
-                 "time_on_page" => 60,
-                 "scroll_depth" => 10
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/blog"], "metrics" => [110, 160, 0, 60, 10, nil]}
              ]
     end
 
@@ -1078,31 +1100,16 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      filters = Jason.encode!([[:is, "event:page", ["/", "/about"]]])
-
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/pages?period=day&date=2021-01-01&filters=#{filters}&detailed=true"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          filters: [["is", "event:page", ["/", "/about"]]],
+          metrics: @detailed_metrics
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "name" => "/",
-                 "visitors" => 2,
-                 "pageviews" => 3,
-                 "bounce_rate" => 50,
-                 "time_on_page" => 75,
-                 "scroll_depth" => 0
-               },
-               %{
-                 "name" => "/about",
-                 "visitors" => 1,
-                 "pageviews" => 1,
-                 "bounce_rate" => 100,
-                 "time_on_page" => 30,
-                 "scroll_depth" => 0
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/"], "metrics" => [2, 3, 50, 75, 0, 66.67]},
+               %{"dimensions" => ["/about"], "metrics" => [1, 1, 100, 30, 0, 33.33]}
              ]
     end
 
@@ -1166,23 +1173,15 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      filters = Jason.encode!([[:is_not, "event:page", ["/irrelevant", "/about"]]])
-
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/pages?period=day&date=2021-01-01&filters=#{filters}&detailed=true"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          filters: [["is_not", "event:page", ["/irrelevant", "/about"]]],
+          metrics: @detailed_metrics
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "name" => "/",
-                 "visitors" => 2,
-                 "pageviews" => 3,
-                 "bounce_rate" => 50,
-                 "time_on_page" => 75,
-                 "scroll_depth" => 0
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/"], "metrics" => [2, 3, 50, 75, 0, 100.0]}
              ]
     end
 
@@ -1246,39 +1245,18 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      filters = Jason.encode!([[:contains, "event:page", ["/blog/", "/articles/"]]])
-
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/pages?period=day&date=2021-01-01&filters=#{filters}&detailed=true"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          filters: [["contains", "event:page", ["/blog/", "/articles/"]]],
+          metrics: @detailed_metrics,
+          order_by: [["visitors", "desc"], ["event:page", "asc"]]
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "name" => "/articles/post-1",
-                 "visitors" => 2,
-                 "pageviews" => 2,
-                 "bounce_rate" => 100,
-                 "time_on_page" => 30,
-                 "scroll_depth" => 0
-               },
-               %{
-                 "name" => "/blog/post-1",
-                 "visitors" => 1,
-                 "pageviews" => 1,
-                 "bounce_rate" => 0,
-                 "time_on_page" => 60,
-                 "scroll_depth" => 0
-               },
-               %{
-                 "name" => "/blog/post-2",
-                 "visitors" => 1,
-                 "pageviews" => 1,
-                 "bounce_rate" => 0,
-                 "time_on_page" => 30,
-                 "scroll_depth" => 0
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/articles/post-1"], "metrics" => [2, 2, 100, 30, 0, 66.67]},
+               %{"dimensions" => ["/blog/post-1"], "metrics" => [1, 1, 0, 60, 0, 33.33]},
+               %{"dimensions" => ["/blog/post-2"], "metrics" => [1, 1, 0, 30, 0, 33.33]}
              ]
     end
 
@@ -1320,31 +1298,17 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      filters = Jason.encode!([[:contains, "event:page", ["/blog/(/", "/blog/)/"]]])
-
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/pages?period=day&date=2021-01-01&filters=#{filters}&detailed=true"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          filters: [["contains", "event:page", ["/blog/(/", "/blog/)/"]]],
+          order_by: [["visitors", "desc"], ["event:page", "asc"]],
+          metrics: @detailed_metrics
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "name" => "/blog/(/post-1",
-                 "visitors" => 1,
-                 "pageviews" => 1,
-                 "bounce_rate" => 0,
-                 "time_on_page" => 60,
-                 "scroll_depth" => 0
-               },
-               %{
-                 "name" => "/blog/(/post-2",
-                 "visitors" => 1,
-                 "pageviews" => 1,
-                 "bounce_rate" => 0,
-                 "time_on_page" => 30,
-                 "scroll_depth" => 0
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/blog/(/post-1"], "metrics" => [1, 1, 0, 60, 0, 100.0]},
+               %{"dimensions" => ["/blog/(/post-2"], "metrics" => [1, 1, 0, 30, 0, 100.0]}
              ]
     end
 
@@ -1408,31 +1372,16 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      filters = Jason.encode!([[:contains_not, "event:page", ["/blog/", "/articles/"]]])
-
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/pages?period=day&date=2021-01-01&filters=#{filters}&detailed=true"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          filters: [["contains_not", "event:page", ["/blog/", "/articles/"]]],
+          metrics: @detailed_metrics
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "name" => "/",
-                 "visitors" => 2,
-                 "pageviews" => 2,
-                 "bounce_rate" => 50,
-                 "time_on_page" => 600,
-                 "scroll_depth" => 0
-               },
-               %{
-                 "name" => "/about",
-                 "visitors" => 1,
-                 "pageviews" => 1,
-                 "bounce_rate" => 0,
-                 "time_on_page" => 30,
-                 "scroll_depth" => 0
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/"], "metrics" => [2, 2, 50, 600, 0, 100.0]},
+               %{"dimensions" => ["/about"], "metrics" => [1, 1, 0, 30, 0, 50.0]}
              ]
     end
 
@@ -1448,28 +1397,30 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         build(:pageview, pathname: "/contact")
       ])
 
-      conn1 = get(conn, "/api/stats/#{site.domain}/pages?period=day")
+      response = query_pages(conn, site, date_range: "day")
 
-      assert json_response(conn1, 200)["results"] == [
-               %{"visitors" => 3, "name" => "/"},
-               %{"visitors" => 2, "name" => "/register"},
-               %{"visitors" => 1, "name" => "/contact"}
+      assert response["results"] == [
+               %{"dimensions" => ["/"], "metrics" => [3, 50.0]},
+               %{"dimensions" => ["/register"], "metrics" => [2, 33.33]},
+               %{"dimensions" => ["/contact"], "metrics" => [1, 16.67]}
              ]
 
-      conn2 = get(conn, "/api/stats/#{site.domain}/pages?period=day&with_imported=true")
+      response = query_pages(conn, site, date_range: "day", include: %{"imports" => true})
 
-      assert json_response(conn2, 200)["results"] == [
-               %{"visitors" => 4, "name" => "/"},
-               %{"visitors" => 3, "name" => "/register"},
-               %{"visitors" => 1, "name" => "/contact"}
+      assert response["results"] == [
+               %{"dimensions" => ["/"], "metrics" => [4, 66.67]},
+               %{"dimensions" => ["/register"], "metrics" => [3, 50.0]},
+               %{"dimensions" => ["/contact"], "metrics" => [1, 16.67]}
              ]
     end
 
     test "returns scroll depth warning code", %{conn: conn, site: site} do
-      conn =
-        get(conn, "/api/stats/#{site.domain}/pages?period=day&detailed=true&with_imported=true")
-
-      response = json_response(conn, 200)
+      response =
+        query_pages(conn, site,
+          date_range: "day",
+          metrics: @detailed_metrics,
+          include: %{"imports" => true}
+        )
 
       assert response["meta"]["metric_warnings"]["scroll_depth"]["code"] ==
                "no_imported_scroll_depth"
@@ -1485,23 +1436,17 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         build(:imported_visitors, visitors: 4)
       ])
 
-      filters = Jason.encode!([[:is, "event:goal", ["Visit /blog**"]]])
-      q = "?period=day&filters=#{filters}&with_imported=true"
-      conn = get(conn, "/api/stats/#{site.domain}/pages#{q}")
+      response =
+        query_pages(conn, site,
+          date_range: "day",
+          filters: [["is", "event:goal", ["Visit /blog**"]]],
+          metrics: @goal_filter_metrics,
+          include: %{"imports" => true}
+        )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "visitors" => 2,
-                 "name" => "/blog/post-1",
-                 "conversion_rate" => 100.0,
-                 "total_visitors" => 2
-               },
-               %{
-                 "visitors" => 1,
-                 "name" => "/blog",
-                 "conversion_rate" => 100.0,
-                 "total_visitors" => 1
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/blog/post-1"], "metrics" => [2, 100.0, 2]},
+               %{"dimensions" => ["/blog"], "metrics" => [1, 100.0, 1]}
              ]
     end
 
@@ -1542,29 +1487,15 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/pages?period=day&date=2021-01-01&detailed=true"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          metrics: @detailed_metrics
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "bounce_rate" => 50.0,
-                 "time_on_page" => 465.0,
-                 "visitors" => 2,
-                 "pageviews" => 2,
-                 "name" => "/",
-                 "scroll_depth" => 0
-               },
-               %{
-                 "bounce_rate" => 0,
-                 "time_on_page" => 30,
-                 "visitors" => 1,
-                 "pageviews" => 1,
-                 "name" => "/some-other-page",
-                 "scroll_depth" => 0
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/"], "metrics" => [2, 2, 50.0, 465.0, 0, 100.0]},
+               %{"dimensions" => ["/some-other-page"], "metrics" => [1, 1, 0, 30, 0, 50.0]}
              ]
     end
 
@@ -1589,23 +1520,15 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      filters = Jason.encode!([[:is, "event:hostname", ["blog.example.com"]]])
-
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/pages?period=day&date=2021-01-01&detailed=true&filters=#{filters}"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          filters: [["is", "event:hostname", ["blog.example.com"]]],
+          metrics: @detailed_metrics
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "bounce_rate" => 50,
-                 "name" => "/about",
-                 "pageviews" => 2,
-                 "time_on_page" => nil,
-                 "visitors" => 2,
-                 "scroll_depth" => nil
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/about"], "metrics" => [2, 2, 50, nil, nil, 100.0]}
              ]
     end
 
@@ -1725,37 +1648,23 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      filters = Jason.encode!([[:is, "event:hostname", ["blog.example.com"]]])
-
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/pages?period=day&date=2021-01-01&detailed=true&filters=#{filters}"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          filters: [["is", "event:hostname", ["blog.example.com"]]],
+          metrics: @detailed_metrics
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "bounce_rate" => 50,
-                 "name" => "/about-blog",
-                 "pageviews" => 3,
-                 "time_on_page" => 435,
-                 "visitors" => 2,
-                 "scroll_depth" => 0
-               },
-               %{
-                 "bounce_rate" => 0,
-                 "name" => "/exit-blog",
-                 "pageviews" => 1,
-                 "time_on_page" => 120,
-                 "visitors" => 1,
-                 "scroll_depth" => 0
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/about-blog"], "metrics" => [2, 3, 50, 435, 0, 100.0]},
+               %{"dimensions" => ["/exit-blog"], "metrics" => [1, 1, 0, 120, 0, 50.0]}
              ]
     end
 
     test "calculates bounce rate and time on page for pages with imported data", %{
       conn: conn,
-      site: site
+      site: site,
+      site_import: site_import
     } do
       populate_stats(site, [
         build(:pageview,
@@ -1811,29 +1720,22 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/pages?period=day&date=2021-01-01&detailed=true&with_imported=true"
+      populate_stats(site, site_import.id, [
+        build(:imported_visitors, date: ~D[2021-01-01]),
+        build(:imported_visitors, date: ~D[2021-01-01]),
+        build(:imported_visitors, date: ~D[2021-01-01])
+      ])
+
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          metrics: @detailed_metrics,
+          include: %{"imports" => true}
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "bounce_rate" => 40.0,
-                 "time_on_page" => 500,
-                 "visitors" => 3,
-                 "pageviews" => 3,
-                 "scroll_depth" => 0,
-                 "name" => "/"
-               },
-               %{
-                 "bounce_rate" => 0,
-                 "time_on_page" => 45,
-                 "visitors" => 2,
-                 "pageviews" => 2,
-                 "scroll_depth" => 0,
-                 "name" => "/some-other-page"
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/"], "metrics" => [3, 3, 40.0, 500, 0, 60.0]},
+               %{"dimensions" => ["/some-other-page"], "metrics" => [2, 2, 0, 45, 0, 40.0]}
              ]
     end
 
@@ -1844,11 +1746,11 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         build(:pageview, pathname: "/page1")
       ])
 
-      conn = get(conn, "/api/stats/#{site.domain}/pages?period=realtime")
+      response = query_pages(conn, site, date_range: "realtime")
 
-      assert json_response(conn, 200)["results"] == [
-               %{"visitors" => 2, "name" => "/page1"},
-               %{"visitors" => 1, "name" => "/page2"}
+      assert response["results"] == [
+               %{"dimensions" => ["/page1"], "metrics" => [2, 66.67]},
+               %{"dimensions" => ["/page2"], "metrics" => [1, 33.33]}
              ]
     end
 
@@ -1861,17 +1763,16 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
       ])
 
       insert(:goal, site: site, event_name: "Signup")
-      filters = Jason.encode!([[:is, "event:goal", ["Signup"]]])
 
-      conn = get(conn, "/api/stats/#{site.domain}/pages?period=day&filters=#{filters}")
+      response =
+        query_pages(conn, site,
+          date_range: "day",
+          filters: [["is", "event:goal", ["Signup"]]],
+          metrics: @goal_filter_metrics
+        )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "total_visitors" => 3,
-                 "visitors" => 1,
-                 "name" => "/",
-                 "conversion_rate" => 33.33
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/"], "metrics" => [1, 33.33, 3]}
              ]
     end
 
@@ -1910,20 +1811,16 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         build(:imported_pages, page: "/ignored", visitors: 10, date: ~D[2021-01-01])
       ])
 
-      filters = Jason.encode!([[:is, "event:page", ["/"]]])
-      q = "?period=day&date=2021-01-01&filters=#{filters}&detailed=true&with_imported=true"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          filters: [["is", "event:page", ["/"]]],
+          metrics: @detailed_metrics,
+          include: %{"imports" => true}
+        )
 
-      conn = get(conn, "/api/stats/#{site.domain}/pages#{q}")
-
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "bounce_rate" => 50,
-                 "name" => "/",
-                 "pageviews" => 4,
-                 "time_on_page" => 90.0,
-                 "visitors" => 4,
-                 "scroll_depth" => 0
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/"], "metrics" => [4, 4, 50, 90.0, 0, 100.0]}
              ]
     end
 
@@ -1973,28 +1870,17 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         build(:imported_pages, page: "/ignored", visitors: 10, date: ~D[2021-01-01])
       ])
 
-      filters = Jason.encode!([[:is, "event:page", ["/", "/a"]]])
-      q = "?period=day&date=2021-01-01&filters=#{filters}&detailed=true&with_imported=true"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          filters: [["is", "event:page", ["/", "/a"]]],
+          metrics: @detailed_metrics,
+          include: %{"imports" => true}
+        )
 
-      conn = get(conn, "/api/stats/#{site.domain}/pages#{q}")
-
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "bounce_rate" => 50,
-                 "name" => "/",
-                 "pageviews" => 4,
-                 "time_on_page" => 90.0,
-                 "visitors" => 4,
-                 "scroll_depth" => 0
-               },
-               %{
-                 "bounce_rate" => 100,
-                 "name" => "/a",
-                 "pageviews" => 1,
-                 "time_on_page" => 10.0,
-                 "visitors" => 1,
-                 "scroll_depth" => nil
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/"], "metrics" => [4, 4, 50, 90.0, 0, 80.0]},
+               %{"dimensions" => ["/a"], "metrics" => [1, 1, 100, 10.0, nil, 20.0]}
              ]
     end
 
@@ -2044,28 +1930,17 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         build(:imported_pages, page: "/ignored", visitors: 10, date: ~D[2021-01-01])
       ])
 
-      filters = Jason.encode!([[:contains, "event:page", ["/a"]]])
-      q = "?period=day&date=2021-01-01&filters=#{filters}&detailed=true&with_imported=true"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          filters: [["contains", "event:page", ["/a"]]],
+          metrics: @detailed_metrics,
+          include: %{"imports" => true}
+        )
 
-      conn = get(conn, "/api/stats/#{site.domain}/pages#{q}")
-
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "bounce_rate" => 50,
-                 "name" => "/aaa",
-                 "pageviews" => 4,
-                 "time_on_page" => 90.0,
-                 "visitors" => 4,
-                 "scroll_depth" => 0
-               },
-               %{
-                 "bounce_rate" => 100,
-                 "name" => "/a",
-                 "pageviews" => 1,
-                 "time_on_page" => 10.0,
-                 "visitors" => 1,
-                 "scroll_depth" => nil
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/aaa"], "metrics" => [4, 4, 50.0, 90, 0, 80.0]},
+               %{"dimensions" => ["/a"], "metrics" => [1, 1, 100.0, 10, nil, 20.0]}
              ]
     end
 
@@ -2089,58 +1964,38 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/pages?period=day&date=2021-01-02&comparison=previous_period&detailed=true"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-02", "2021-01-02"],
+          metrics: @detailed_metrics,
+          include: %{"compare" => "previous_period"}
         )
 
-      assert json_response(conn, 200)["results"] == [
+      assert response["results"] == [
                %{
-                 "bounce_rate" => 100,
+                 "dimensions" => ["/page2"],
+                 "metrics" => [2, 2, 100, nil, nil, 66.67],
                  "comparison" => %{
-                   "bounce_rate" => 0,
-                   "pageviews" => 0,
-                   "time_on_page" => nil,
-                   "visitors" => 0,
-                   "scroll_depth" => nil,
-                   "change" => %{
-                     "bounce_rate" => nil,
-                     "pageviews" => 100,
-                     "time_on_page" => nil,
-                     "visitors" => 100,
-                     "scroll_depth" => nil
-                   }
-                 },
-                 "name" => "/page2",
-                 "pageviews" => 2,
-                 "time_on_page" => nil,
-                 "visitors" => 2,
-                 "scroll_depth" => nil
+                   "dimensions" => ["/page2"],
+                   "metrics" => [0, 0, 0.0, nil, nil, 0.0],
+                   "change" => [100, 100, nil, nil, nil, 100]
+                 }
                },
                %{
-                 "bounce_rate" => 100,
-                 "name" => "/page1",
-                 "pageviews" => 1,
-                 "time_on_page" => nil,
-                 "visitors" => 1,
-                 "scroll_depth" => nil,
+                 "dimensions" => ["/page1"],
+                 "metrics" => [1, 1, 100, nil, nil, 33.33],
                  "comparison" => %{
-                   "bounce_rate" => 100,
-                   "pageviews" => 1,
-                   "time_on_page" => nil,
-                   "visitors" => 1,
-                   "scroll_depth" => nil,
-                   "change" => %{
-                     "bounce_rate" => 0,
-                     "pageviews" => 0,
-                     "time_on_page" => nil,
-                     "visitors" => 0,
-                     "scroll_depth" => nil
-                   }
+                   "dimensions" => ["/page1"],
+                   "metrics" => [1, 1, 100, nil, nil, 100.0],
+                   "change" => [0, 0, 0, nil, nil, -67]
                  }
                }
              ]
+
+      assert %{
+               "comparison_date_range" => ["2021-01-01T00:00:00Z", "2021-01-01T23:59:59Z"],
+               "date_range" => ["2021-01-02T00:00:00Z", "2021-01-02T23:59:59Z"]
+             } = response["query"]
     end
 
     on_ee do
@@ -2160,37 +2015,16 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
           build(:pageview, pathname: "/b1", timestamp: ~N[2021-01-01 00:00:00])
         ])
 
-        conn =
-          get(
-            conn,
-            "/api/stats/#{cv.domain}/pages?period=day&date=2021-01-01&detailed=true"
+        response =
+          query_pages(conn, cv,
+            date_range: ["2021-01-01", "2021-01-01"],
+            metrics: @detailed_metrics
           )
 
-        assert json_response(conn, 200)["results"] == [
-                 %{
-                   "bounce_rate" => 100,
-                   "name" => "/b1",
-                   "pageviews" => 3,
-                   "time_on_page" => nil,
-                   "visitors" => 3,
-                   "scroll_depth" => nil
-                 },
-                 %{
-                   "bounce_rate" => 100,
-                   "name" => "/a2",
-                   "pageviews" => 2,
-                   "time_on_page" => nil,
-                   "visitors" => 2,
-                   "scroll_depth" => nil
-                 },
-                 %{
-                   "bounce_rate" => 100,
-                   "name" => "/a1",
-                   "pageviews" => 1,
-                   "time_on_page" => nil,
-                   "visitors" => 1,
-                   "scroll_depth" => nil
-                 }
+        assert response["results"] == [
+                 %{"dimensions" => ["/b1"], "metrics" => [3, 3, 100, nil, nil, 50.0]},
+                 %{"dimensions" => ["/a2"], "metrics" => [2, 2, 100, nil, nil, 33.33]},
+                 %{"dimensions" => ["/a1"], "metrics" => [1, 1, 100, nil, nil, 16.67]}
                ]
       end
     end
@@ -2229,23 +2063,16 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      conn = get(conn, "/api/stats/#{site.domain}/entry-pages?period=day&date=2021-01-01")
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          dimensions: ["visit:entry_page"],
+          metrics: ["visitors", "visits", "bounce_rate", "visit_duration", "percentage"]
+        )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "visitors" => 2,
-                 "visits" => 2,
-                 "name" => "/page1",
-                 "visit_duration" => 0,
-                 "bounce_rate" => 100
-               },
-               %{
-                 "visitors" => 1,
-                 "visits" => 2,
-                 "name" => "/page2",
-                 "visit_duration" => 450,
-                 "bounce_rate" => 50
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/page1"], "metrics" => [2, 2, 100, 0, 66.67]},
+               %{"dimensions" => ["/page2"], "metrics" => [1, 2, 50, 450, 33.33]}
              ]
     end
 
@@ -2281,29 +2108,17 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      filters = Jason.encode!([[:is, "event:props:author", ["John Doe"]]])
-
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/entry-pages?period=day&date=2021-01-01&filters=#{filters}"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          dimensions: ["visit:entry_page"],
+          filters: [["is", "event:props:author", ["John Doe"]]],
+          metrics: ["visitors", "visits", "bounce_rate", "visit_duration", "percentage"]
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "visitors" => 1,
-                 "visits" => 1,
-                 "name" => "/blog",
-                 "visit_duration" => 60,
-                 "bounce_rate" => 0
-               },
-               %{
-                 "visitors" => 1,
-                 "visits" => 1,
-                 "name" => "/blog/john-2",
-                 "visit_duration" => 0,
-                 "bounce_rate" => 100
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/blog"], "metrics" => [1, 1, 0, 60, 50.0]},
+               %{"dimensions" => ["/blog/john-2"], "metrics" => [1, 1, 100, 0, 50.0]}
              ]
     end
 
@@ -2335,6 +2150,10 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
       ])
 
       populate_stats(site, [
+        build(:imported_visitors,
+          date: ~D[2021-01-01],
+          visitors: 2
+        ),
         build(:imported_entry_pages,
           entry_page: "/page2",
           date: ~D[2021-01-01],
@@ -2344,46 +2163,29 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      conn1 = get(conn, "/api/stats/#{site.domain}/entry-pages?period=day&date=2021-01-01")
-
-      assert json_response(conn1, 200)["results"] == [
-               %{
-                 "visitors" => 2,
-                 "visits" => 2,
-                 "name" => "/page1",
-                 "visit_duration" => 0,
-                 "bounce_rate" => 100
-               },
-               %{
-                 "visitors" => 1,
-                 "visits" => 2,
-                 "name" => "/page2",
-                 "visit_duration" => 450,
-                 "bounce_rate" => 50
-               }
-             ]
-
-      conn2 =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/entry-pages?period=day&date=2021-01-01&with_imported=true"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          dimensions: ["visit:entry_page"],
+          metrics: ["visitors", "visits", "bounce_rate", "visit_duration", "percentage"]
         )
 
-      assert json_response(conn2, 200)["results"] == [
-               %{
-                 "visitors" => 3,
-                 "visits" => 5,
-                 "name" => "/page2",
-                 "visit_duration" => 240.0,
-                 "bounce_rate" => 20
-               },
-               %{
-                 "visitors" => 2,
-                 "visits" => 2,
-                 "name" => "/page1",
-                 "visit_duration" => 0,
-                 "bounce_rate" => 100
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/page1"], "metrics" => [2, 2, 100, 0, 66.67]},
+               %{"dimensions" => ["/page2"], "metrics" => [1, 2, 50, 450, 33.33]}
+             ]
+
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          dimensions: ["visit:entry_page"],
+          metrics: ["visitors", "visits", "bounce_rate", "visit_duration", "percentage"],
+          include: %{"imports" => true}
+        )
+
+      assert response["results"] == [
+               %{"dimensions" => ["/page2"], "metrics" => [3, 5, 20.0, 240.0, 60.0]},
+               %{"dimensions" => ["/page1"], "metrics" => [2, 2, 100.0, 0.0, 40.0]}
              ]
     end
 
@@ -2425,30 +2227,19 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      filters = Jason.encode!([[:is, "event:hostname", ["es.example.com"]]])
-
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/entry-pages?period=day&date=2021-01-01&filters=#{filters}"
+      # We're going to only join sessions where the exit hostname matches the filter
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          dimensions: ["visit:entry_page"],
+          filters: [["is", "event:hostname", ["es.example.com"]]],
+          metrics: ["visitors", "visits", "bounce_rate", "visit_duration", "percentage"],
+          order_by: [["visitors", "desc"], ["visit:entry_page", "asc"]]
         )
 
-      # We're going to only join sessions where the exit hostname matches the filter
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "name" => "/page1",
-                 "visit_duration" => 0,
-                 "visitors" => 1,
-                 "visits" => 1,
-                 "bounce_rate" => 100
-               },
-               %{
-                 "name" => "/page2",
-                 "visit_duration" => 0,
-                 "visitors" => 1,
-                 "visits" => 1,
-                 "bounce_rate" => 100
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/page1"], "metrics" => [1, 1, 100, 0, 50.0]},
+               %{"dimensions" => ["/page2"], "metrics" => [1, 1, 100, 0, 50.0]}
              ]
     end
 
@@ -2468,31 +2259,32 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
       insert(:goal, site: site, event_name: "Signup")
 
       request = fn conn, opts ->
-        page = Keyword.fetch!(opts, :page)
-        limit = Keyword.fetch!(opts, :limit)
-        filters = Jason.encode!([[:is, "event:goal", ["Signup"]]])
-
         conn
-        |> get(
-          "/api/stats/#{site.domain}/pages?date=2021-01-01&period=day&filters=#{filters}&limit=#{limit}&page=#{page}"
+        |> query_pages(site,
+          metrics: ["visitors"],
+          pagination: %{
+            "offset" => Keyword.fetch!(opts, :offset),
+            "limit" => Keyword.fetch!(opts, :limit)
+          },
+          filters: [["is", "event:goal", ["Signup"]]],
+          order_by: [["event:page", "asc"]]
         )
-        |> json_response(200)
         |> Map.get("results")
-        |> Enum.map(fn %{"name" => "/signup/" <> seq} ->
+        |> Enum.map(fn %{"dimensions" => ["/signup/" <> seq]} ->
           seq
         end)
       end
 
-      assert List.first(request.(conn, page: 1, limit: 100)) == "01"
-      assert List.last(request.(conn, page: 1, limit: 100)) == "30"
-      assert List.last(request.(conn, page: 1, limit: 29)) == "29"
-      assert ["01", "02"] = request.(conn, page: 1, limit: 2)
-      assert ["03", "04"] = request.(conn, page: 2, limit: 2)
-      assert ["01", "02", "03", "04", "05"] = request.(conn, page: 1, limit: 5)
-      assert ["06", "07", "08", "09", "10"] = request.(conn, page: 2, limit: 5)
-      assert ["11", "12", "13", "14", "15"] = request.(conn, page: 3, limit: 5)
-      assert ["20"] = request.(conn, page: 20, limit: 1)
-      assert [] = request.(conn, page: 31, limit: 1)
+      assert List.first(request.(conn, offset: 0, limit: 100)) == "01"
+      assert List.last(request.(conn, offset: 0, limit: 100)) == "30"
+      assert List.last(request.(conn, offset: 0, limit: 29)) == "29"
+      assert ["01", "02"] = request.(conn, offset: 0, limit: 2)
+      assert ["03", "04"] = request.(conn, offset: 2, limit: 2)
+      assert ["01", "02", "03", "04", "05"] = request.(conn, offset: 0, limit: 5)
+      assert ["06", "07", "08", "09", "10"] = request.(conn, offset: 5, limit: 5)
+      assert ["11", "12", "13", "14", "15"] = request.(conn, offset: 10, limit: 5)
+      assert ["20"] = request.(conn, offset: 19, limit: 1)
+      assert [] = request.(conn, offset: 30, limit: 1)
     end
 
     test "calculates conversion_rate when filtering for goal", %{conn: conn, site: site} do
@@ -2530,31 +2322,26 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
       ])
 
       insert(:goal, site: site, event_name: "Signup")
-      filters = Jason.encode!([[:is, "event:goal", ["Signup"]]])
 
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/entry-pages?period=day&date=2021-01-01&filters=#{filters}"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          dimensions: ["visit:entry_page"],
+          filters: [["is", "event:goal", ["Signup"]]],
+          metrics: ["visitors", "group_conversion_rate", "total_visitors"],
+          order_by: [["visitors", "desc"], ["visit:entry_page", "asc"]]
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "total_visitors" => 2,
-                 "visitors" => 1,
-                 "name" => "/page1",
-                 "conversion_rate" => 50.0
-               },
-               %{
-                 "total_visitors" => 1,
-                 "visitors" => 1,
-                 "name" => "/page2",
-                 "conversion_rate" => 100.0
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/page1"], "metrics" => [1, 50.0, 2]},
+               %{"dimensions" => ["/page2"], "metrics" => [1, 100.0, 1]}
              ]
     end
 
-    test "ignores entry pages from sessions with only custom events", %{conn: conn, site: site} do
+    test "can filter out empty entry pages (sessions with only custom events)", %{
+      conn: conn,
+      site: site
+    } do
       populate_stats(site, [
         build(:event,
           name: "Signup",
@@ -2563,13 +2350,15 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/entry-pages?period=day&date=2021-01-01"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          dimensions: ["visit:entry_page"],
+          filters: [["is_not", "visit:entry_page", [""]]],
+          metrics: ["visitors", "visits", "bounce_rate", "visit_duration", "percentage"]
         )
 
-      assert json_response(conn, 200)["results"] == []
+      assert response["results"] == []
     end
 
     test "filter by :matches_member entry_page with imported data", %{conn: conn, site: site} do
@@ -2595,32 +2384,68 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      filters = Jason.encode!([[:contains, "visit:entry_page", ["/a", "/b"]]])
-      q = "?period=day&date=2021-01-01&filters=#{filters}&detailed=true&with_imported=true"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          dimensions: ["visit:entry_page"],
+          filters: [["contains", "visit:entry_page", ["/a", "/b"]]],
+          metrics: ["visitors", "visits", "bounce_rate", "visit_duration", "percentage"],
+          include: %{"imports" => true}
+        )
 
-      conn = get(conn, "/api/stats/#{site.domain}/entry-pages#{q}")
+      assert response["results"] == [
+               %{"dimensions" => ["/a"], "metrics" => [6, 10, 10.0, 100.0, 66.67]},
+               %{"dimensions" => ["/bbb"], "metrics" => [2, 2, 0.0, 50.0, 22.22]},
+               %{"dimensions" => ["/aaa"], "metrics" => [1, 1, 100.0, 0, 11.11]}
+             ]
+    end
 
-      assert json_response(conn, 200)["results"] == [
+    test "returns entry pages broken down by entry page hostname and page",
+         %{conn: conn, site: site} do
+      populate_stats(site, [
+        build(:pageview,
+          pathname: "/landing",
+          hostname: "blog.example.com",
+          user_id: 1,
+          timestamp: ~N[2021-01-01 00:00:00]
+        ),
+        build(:pageview,
+          pathname: "/about",
+          hostname: "blog.example.com",
+          user_id: 1,
+          timestamp: ~N[2021-01-01 00:05:00]
+        ),
+        build(:pageview,
+          pathname: "/landing",
+          hostname: "blog.example.com",
+          user_id: 2,
+          timestamp: ~N[2021-01-01 00:00:00]
+        ),
+        build(:pageview,
+          pathname: "/landing",
+          hostname: "www.example.com",
+          user_id: 3,
+          timestamp: ~N[2021-01-01 00:00:00]
+        )
+      ])
+
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          dimensions: ["visit:entry_page_hostname", "visit:entry_page"],
+          metrics: ["visitors", "visits", "bounce_rate", "percentage"],
+          filters: [["is_not", "visit:entry_page", [""]]],
+          order_by: [["visitors", "desc"], ["visit:entry_page_hostname", "asc"]]
+        )
+
+      assert response["results"] == [
                %{
-                 "visit_duration" => 100.0,
-                 "name" => "/a",
-                 "visits" => 10,
-                 "visitors" => 6,
-                 "bounce_rate" => 10
+                 "dimensions" => ["blog.example.com", "/landing"],
+                 "metrics" => [2, 2, 50, 66.67]
                },
                %{
-                 "visit_duration" => 50.0,
-                 "name" => "/bbb",
-                 "visits" => 2,
-                 "visitors" => 2,
-                 "bounce_rate" => 0
-               },
-               %{
-                 "visit_duration" => 0,
-                 "name" => "/aaa",
-                 "visits" => 1,
-                 "visitors" => 1,
-                 "bounce_rate" => 100
+                 "dimensions" => ["www.example.com", "/landing"],
+                 "metrics" => [1, 1, 100, 33.33]
                }
              ]
     end
@@ -2651,11 +2476,16 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      conn = get(conn, "/api/stats/#{site.domain}/exit-pages?period=day&date=2021-01-01")
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          dimensions: ["visit:exit_page"],
+          metrics: ["visitors", "visits", "exit_rate", "percentage"]
+        )
 
-      assert json_response(conn, 200)["results"] == [
-               %{"name" => "/page1", "visitors" => 2, "visits" => 2, "exit_rate" => 66.7},
-               %{"name" => "/page2", "visitors" => 1, "visits" => 1, "exit_rate" => 100}
+      assert response["results"] == [
+               %{"dimensions" => ["/page1"], "metrics" => [2, 2, 66.7, 66.67]},
+               %{"dimensions" => ["/page2"], "metrics" => [1, 1, 100, 33.33]}
              ]
     end
 
@@ -2681,15 +2511,17 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/exit-pages?period=day&date=2021-01-01&order_by=#{Jason.encode!([["visits", "asc"]])}"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          dimensions: ["visit:exit_page"],
+          metrics: ["visitors", "visits", "exit_rate", "percentage"],
+          order_by: [["visits", "asc"]]
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{"name" => "/page2", "visitors" => 1, "visits" => 1, "exit_rate" => 100},
-               %{"name" => "/page1", "visitors" => 2, "visits" => 2, "exit_rate" => 66.7}
+      assert response["results"] == [
+               %{"dimensions" => ["/page2"], "metrics" => [1, 1, 100.0, 33.33]},
+               %{"dimensions" => ["/page1"], "metrics" => [2, 2, 66.7, 66.67]}
              ]
     end
 
@@ -2726,17 +2558,18 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      filters = Jason.encode!([[:is, "event:hostname", ["es.example.com"]]])
-
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/exit-pages?period=day&date=2021-01-01&filters=#{filters}"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          dimensions: ["visit:exit_page"],
+          filters: [["is", "event:hostname", ["es.example.com"]]],
+          metrics: ["visitors", "visits", "percentage"]
         )
 
       # We're going to only join sessions where the entry hostname matches the filter
-      assert json_response(conn, 200)["results"] ==
-               [%{"name" => "/page1", "visitors" => 1, "visits" => 1}]
+      assert response["results"] == [
+               %{"dimensions" => ["/page1"], "metrics" => [1, 1, 100.0]}
+             ]
     end
 
     test "returns top exit pages filtered by custom pageview props", %{conn: conn, site: site} do
@@ -2765,16 +2598,16 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      filters = Jason.encode!([[:is, "event:props:author", ["John Doe"]]])
-
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/exit-pages?period=day&date=2021-01-01&filters=#{filters}"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          dimensions: ["visit:exit_page"],
+          filters: [["is", "event:props:author", ["John Doe"]]],
+          metrics: ["visitors", "visits", "percentage"]
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{"name" => "/", "visitors" => 1, "visits" => 1}
+      assert response["results"] == [
+               %{"dimensions" => ["/"], "metrics" => [1, 1, 100.0]}
              ]
     end
 
@@ -2815,31 +2648,35 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      conn1 = get(conn, "/api/stats/#{site.domain}/exit-pages?period=day&date=2021-01-01")
-
-      assert json_response(conn1, 200)["results"] == [
-               %{"name" => "/page1", "visitors" => 2, "visits" => 2, "exit_rate" => 66.7},
-               %{"name" => "/page2", "visitors" => 1, "visits" => 1, "exit_rate" => 100}
-             ]
-
-      conn2 =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/exit-pages?period=day&date=2021-01-01&with_imported=true"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          dimensions: ["visit:exit_page"],
+          filters: [["is_not", "visit:exit_page", [""]]],
+          metrics: ["visitors", "visits", "exit_rate", "percentage"]
         )
 
-      assert json_response(conn2, 200)["results"] == [
-               %{
-                 "name" => "/page2",
-                 "visitors" => 3,
-                 "visits" => 4,
-                 "exit_rate" => 80.0
-               },
-               %{"name" => "/page1", "visitors" => 2, "visits" => 2, "exit_rate" => 66.7}
+      assert response["results"] == [
+               %{"dimensions" => ["/page1"], "metrics" => [2, 2, 66.7, 66.67]},
+               %{"dimensions" => ["/page2"], "metrics" => [1, 1, 100.0, 33.33]}
+             ]
+
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          dimensions: ["visit:exit_page"],
+          filters: [["is_not", "visit:exit_page", [""]]],
+          metrics: ["visitors", "visits", "exit_rate", "percentage"],
+          include: %{"imports" => true}
+        )
+
+      assert response["results"] == [
+               %{"dimensions" => ["/page2"], "metrics" => [3, 4, 80.0, 60.0]},
+               %{"dimensions" => ["/page1"], "metrics" => [2, 2, 66.7, 40.0]}
              ]
     end
 
-    test "calculates correct exit rate and conversion_rate when filtering for goal", %{
+    test "returns top exit pages when filtering for goal", %{
       conn: conn,
       site: site
     } do
@@ -2872,31 +2709,23 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
       ])
 
       insert(:goal, site: site, event_name: "Signup")
-      filters = Jason.encode!([[:is, "event:goal", ["Signup"]]])
 
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/exit-pages?period=day&date=2021-01-01&filters=#{filters}"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          dimensions: ["visit:exit_page"],
+          filters: [["is", "event:goal", ["Signup"]]],
+          metrics: ["visitors", "group_conversion_rate", "total_visitors"],
+          order_by: [["visitors", "desc"], ["visit:exit_page", "asc"]]
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "name" => "/exit1",
-                 "visitors" => 1,
-                 "total_visitors" => 1,
-                 "conversion_rate" => 100.0
-               },
-               %{
-                 "name" => "/exit2",
-                 "visitors" => 1,
-                 "total_visitors" => 1,
-                 "conversion_rate" => 100.0
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/exit1"], "metrics" => [1, 100.0, 1]},
+               %{"dimensions" => ["/exit2"], "metrics" => [1, 100.0, 1]}
              ]
     end
 
-    test "calculates correct exit rate when filtering for page", %{conn: conn, site: site} do
+    test "returns top exit pages when filtering for page", %{conn: conn, site: site} do
       populate_stats(site, [
         build(:pageview,
           user_id: 1,
@@ -2925,21 +2754,24 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      filters = Jason.encode!([[:is, "event:page", ["/exit1"]]])
-
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/exit-pages?period=day&date=2021-01-01&filters=#{filters}"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          dimensions: ["visit:exit_page"],
+          filters: [["is", "event:page", ["/exit1"]]],
+          metrics: ["visitors", "visits", "percentage"]
         )
 
-      assert json_response(conn, 200)["results"] == [
-               %{"name" => "/exit1", "visitors" => 1, "visits" => 1},
-               %{"name" => "/exit2", "visitors" => 1, "visits" => 1}
+      assert response["results"] == [
+               %{"dimensions" => ["/exit1"], "metrics" => [1, 1, 50.0]},
+               %{"dimensions" => ["/exit2"], "metrics" => [1, 1, 50.0]}
              ]
     end
 
-    test "ignores exit pages from sessions with only custom events", %{conn: conn, site: site} do
+    test "can filter out empty exit pages (sessions with only custom events)", %{
+      conn: conn,
+      site: site
+    } do
       populate_stats(site, [
         build(:event,
           name: "Signup",
@@ -2948,13 +2780,102 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         )
       ])
 
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/exit-pages?period=day&date=2021-01-01"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          dimensions: ["visit:exit_page"],
+          filters: [["is_not", "visit:exit_page", [""]]],
+          metrics: ["visitors", "visits", "exit_rate", "percentage"]
         )
 
-      assert json_response(conn, 200)["results"] == []
+      assert response["results"] == []
+    end
+
+    test "returns exit pages broken down by exit page hostname and page with exit_rate",
+         %{conn: conn, site: site} do
+      populate_stats(site, [
+        build(:pageview,
+          pathname: "/about",
+          hostname: "blog.example.com",
+          user_id: 1,
+          timestamp: ~N[2021-01-01 00:00:00]
+        ),
+        build(:pageview,
+          pathname: "/about",
+          hostname: "blog.example.com",
+          user_id: 2,
+          timestamp: ~N[2021-01-01 00:00:00]
+        ),
+        build(:pageview,
+          pathname: "/about",
+          hostname: "www.example.com",
+          user_id: 3,
+          timestamp: ~N[2021-01-01 00:00:00]
+        ),
+        build(:pageview,
+          pathname: "/docs",
+          hostname: "www.example.com",
+          user_id: 3,
+          timestamp: ~N[2021-01-01 00:05:00]
+        )
+      ])
+
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          dimensions: ["visit:exit_page_hostname", "visit:exit_page"],
+          metrics: ["visitors", "visits", "exit_rate", "percentage"],
+          filters: [["is_not", "visit:exit_page", [""]]],
+          order_by: [["visitors", "desc"], ["visit:exit_page_hostname", "asc"]]
+        )
+
+      assert response["results"] == [
+               %{
+                 "dimensions" => ["blog.example.com", "/about"],
+                 "metrics" => [2, 2, 66.7, 66.67]
+               },
+               %{
+                 "dimensions" => ["www.example.com", "/docs"],
+                 "metrics" => [1, 1, 100.0, 33.33]
+               }
+             ]
+    end
+
+    test "exit_rate works with exit page hostname and page dimensions in either order",
+         %{conn: conn, site: site} do
+      populate_stats(site, [
+        build(:pageview,
+          pathname: "/about",
+          hostname: "blog.example.com",
+          user_id: 1,
+          timestamp: ~N[2021-01-01 00:00:00]
+        ),
+        build(:pageview,
+          pathname: "/about",
+          hostname: "blog.example.com",
+          user_id: 2,
+          timestamp: ~N[2021-01-01 00:00:00]
+        )
+      ])
+
+      for dimensions <- [
+            ["visit:exit_page_hostname", "visit:exit_page"],
+            ["visit:exit_page", "visit:exit_page_hostname"]
+          ] do
+        response =
+          query_pages(conn, site,
+            date_range: ["2021-01-01", "2021-01-01"],
+            dimensions: dimensions,
+            metrics: ["visitors", "exit_rate"],
+            filters: [["is_not", "visit:exit_page", [""]]]
+          )
+
+        assert response["results"] != [],
+               "expected results for dimensions #{inspect(dimensions)}"
+
+        assert Enum.all?(response["results"], fn r -> not is_nil(r["metrics"]) end),
+               "expected no errors for dimensions #{inspect(dimensions)}"
+      end
     end
 
     test "filter by :is_not exit_page with imported data", %{conn: conn, site: site} do
@@ -2982,30 +2903,19 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
         build(:imported_pages, page: "/bbb", pageviews: 2, date: ~D[2021-01-01])
       ])
 
-      filters = Jason.encode!([[:is_not, "visit:exit_page", ["/ignored"]]])
-      q = "?period=day&date=2021-01-01&filters=#{filters}&detailed=true&with_imported=true"
+      response =
+        query_pages(conn, site,
+          date_range: ["2021-01-01", "2021-01-01"],
+          dimensions: ["visit:exit_page"],
+          filters: [["is_not", "visit:exit_page", ["/ignored"]]],
+          metrics: ["visitors", "visits", "exit_rate", "percentage"],
+          include: %{"imports" => true}
+        )
 
-      conn = get(conn, "/api/stats/#{site.domain}/exit-pages#{q}")
-
-      assert json_response(conn, 200)["results"] == [
-               %{
-                 "exit_rate" => 50.0,
-                 "name" => "/a",
-                 "visits" => 10,
-                 "visitors" => 6
-               },
-               %{
-                 "exit_rate" => 100.0,
-                 "name" => "/bbb",
-                 "visits" => 2,
-                 "visitors" => 2
-               },
-               %{
-                 "exit_rate" => 100.0,
-                 "name" => "/aaa",
-                 "visits" => 1,
-                 "visitors" => 1
-               }
+      assert response["results"] == [
+               %{"dimensions" => ["/a"], "metrics" => [6, 10, 50.0, 66.67]},
+               %{"dimensions" => ["/bbb"], "metrics" => [2, 2, 100.0, 22.22]},
+               %{"dimensions" => ["/aaa"], "metrics" => [1, 1, 100.0, 11.11]}
              ]
     end
 
@@ -3052,71 +2962,81 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
 
       insert(:goal, %{site: site, event_name: "Payment", currency: :USD})
 
-      filters = Jason.encode!([[:is, "event:goal", ["Payment"]]])
-      order_by = Jason.encode!([["visitors", "desc"]])
-
-      q = "?filters=#{filters}&order_by=#{order_by}&detailed=true&period=day&page=1&limit=100"
-
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/entry-pages#{q}"
+      response =
+        query_pages(conn, site,
+          date_range: "day",
+          dimensions: ["visit:entry_page"],
+          filters: [["is", "event:goal", ["Payment"]], ["is_not", "visit:entry_page", [""]]],
+          metrics: [
+            "visitors",
+            "group_conversion_rate",
+            "total_visitors",
+            "average_revenue",
+            "total_revenue"
+          ],
+          order_by: [["visitors", "desc"], ["visit:entry_page", "asc"]]
         )
 
-      assert json_response(conn, 200)["results"] == [
+      assert response["results"] == [
                %{
-                 "average_revenue" => %{
-                   "currency" => "USD",
-                   "long" => "$1,500.00",
-                   "short" => "$1.5K",
-                   "value" => 1500.0
-                 },
-                 "conversion_rate" => 100.0,
-                 "name" => "/first",
-                 "total_revenue" => %{
-                   "currency" => "USD",
-                   "long" => "$3,000.00",
-                   "short" => "$3.0K",
-                   "value" => 3000.0
-                 },
-                 "total_visitors" => 2,
-                 "visitors" => 2
+                 "dimensions" => ["/first"],
+                 "metrics" => [
+                   2,
+                   100.0,
+                   2,
+                   %{
+                     "currency" => "USD",
+                     "long" => "$1,500.00",
+                     "short" => "$1.5K",
+                     "value" => 1500.0
+                   },
+                   %{
+                     "currency" => "USD",
+                     "long" => "$3,000.00",
+                     "short" => "$3.0K",
+                     "value" => 3000.0
+                   }
+                 ]
                },
                %{
-                 "average_revenue" => %{
-                   "currency" => "USD",
-                   "long" => "$3,500.00",
-                   "short" => "$3.5K",
-                   "value" => 3500.0
-                 },
-                 "conversion_rate" => 100.0,
-                 "name" => "/second",
-                 "total_revenue" => %{
-                   "currency" => "USD",
-                   "long" => "$7,000.00",
-                   "short" => "$7.0K",
-                   "value" => 7000.0
-                 },
-                 "total_visitors" => 1,
-                 "visitors" => 1
+                 "dimensions" => ["/second"],
+                 "metrics" => [
+                   1,
+                   100.0,
+                   1,
+                   %{
+                     "currency" => "USD",
+                     "long" => "$3,500.00",
+                     "short" => "$3.5K",
+                     "value" => 3500.0
+                   },
+                   %{
+                     "currency" => "USD",
+                     "long" => "$7,000.00",
+                     "short" => "$7.0K",
+                     "value" => 7000.0
+                   }
+                 ]
                },
                %{
-                 "average_revenue" => %{
-                   "currency" => "USD",
-                   "long" => "$2,500.00",
-                   "short" => "$2.5K",
-                   "value" => 2500.0
-                 },
-                 "conversion_rate" => 100.0,
-                 "name" => "/third",
-                 "total_revenue" => %{
-                   "currency" => "USD",
-                   "long" => "$2,500.00",
-                   "short" => "$2.5K",
-                   "value" => 2500.0
-                 },
-                 "total_visitors" => 1,
-                 "visitors" => 1
+                 "dimensions" => ["/third"],
+                 "metrics" => [
+                   1,
+                   100.0,
+                   1,
+                   %{
+                     "currency" => "USD",
+                     "long" => "$2,500.00",
+                     "short" => "$2.5K",
+                     "value" => 2500.0
+                   },
+                   %{
+                     "currency" => "USD",
+                     "long" => "$2,500.00",
+                     "short" => "$2.5K",
+                     "value" => 2500.0
+                   }
+                 ]
                }
              ]
     end
@@ -3167,71 +3087,81 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
 
       insert(:goal, %{site: site, event_name: "Payment", currency: :USD})
 
-      filters = Jason.encode!([[:is, "event:goal", ["Payment"]]])
-      order_by = Jason.encode!([["visitors", "desc"]])
-
-      q = "?filters=#{filters}&order_by=#{order_by}&detailed=true&period=day&page=1&limit=100"
-
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/exit-pages#{q}"
+      response =
+        query_pages(conn, site,
+          date_range: "day",
+          dimensions: ["visit:exit_page"],
+          filters: [["is", "event:goal", ["Payment"]], ["is_not", "visit:exit_page", [""]]],
+          metrics: [
+            "visitors",
+            "group_conversion_rate",
+            "total_visitors",
+            "average_revenue",
+            "total_revenue"
+          ],
+          order_by: [["visitors", "desc"], ["visit:exit_page", "asc"]]
         )
 
-      assert json_response(conn, 200)["results"] == [
+      assert response["results"] == [
                %{
-                 "average_revenue" => %{
-                   "currency" => "USD",
-                   "long" => "$1,500.00",
-                   "short" => "$1.5K",
-                   "value" => 1500.0
-                 },
-                 "conversion_rate" => 100.0,
-                 "name" => "/exit_first",
-                 "total_revenue" => %{
-                   "currency" => "USD",
-                   "long" => "$3,000.00",
-                   "short" => "$3.0K",
-                   "value" => 3000.0
-                 },
-                 "total_visitors" => 2,
-                 "visitors" => 2
+                 "dimensions" => ["/exit_first"],
+                 "metrics" => [
+                   2,
+                   100.0,
+                   2,
+                   %{
+                     "currency" => "USD",
+                     "long" => "$1,500.00",
+                     "short" => "$1.5K",
+                     "value" => 1500.0
+                   },
+                   %{
+                     "currency" => "USD",
+                     "long" => "$3,000.00",
+                     "short" => "$3.0K",
+                     "value" => 3000.0
+                   }
+                 ]
                },
                %{
-                 "average_revenue" => %{
-                   "currency" => "USD",
-                   "long" => "$3,500.00",
-                   "short" => "$3.5K",
-                   "value" => 3500.0
-                 },
-                 "conversion_rate" => 100.0,
-                 "name" => "/exit_second",
-                 "total_revenue" => %{
-                   "currency" => "USD",
-                   "long" => "$7,000.00",
-                   "short" => "$7.0K",
-                   "value" => 7000.0
-                 },
-                 "total_visitors" => 1,
-                 "visitors" => 1
+                 "dimensions" => ["/exit_second"],
+                 "metrics" => [
+                   1,
+                   100.0,
+                   1,
+                   %{
+                     "currency" => "USD",
+                     "long" => "$3,500.00",
+                     "short" => "$3.5K",
+                     "value" => 3500.0
+                   },
+                   %{
+                     "currency" => "USD",
+                     "long" => "$7,000.00",
+                     "short" => "$7.0K",
+                     "value" => 7000.0
+                   }
+                 ]
                },
                %{
-                 "average_revenue" => %{
-                   "currency" => "USD",
-                   "long" => "$2,500.00",
-                   "short" => "$2.5K",
-                   "value" => 2500.0
-                 },
-                 "conversion_rate" => 100.0,
-                 "name" => "/third",
-                 "total_revenue" => %{
-                   "currency" => "USD",
-                   "long" => "$2,500.00",
-                   "short" => "$2.5K",
-                   "value" => 2500.0
-                 },
-                 "total_visitors" => 1,
-                 "visitors" => 1
+                 "dimensions" => ["/third"],
+                 "metrics" => [
+                   1,
+                   100.0,
+                   1,
+                   %{
+                     "currency" => "USD",
+                     "long" => "$2,500.00",
+                     "short" => "$2.5K",
+                     "value" => 2500.0
+                   },
+                   %{
+                     "currency" => "USD",
+                     "long" => "$2,500.00",
+                     "short" => "$2.5K",
+                     "value" => 2500.0
+                   }
+                 ]
                }
              ]
     end
@@ -3288,89 +3218,89 @@ defmodule PlausibleWeb.Api.StatsController.PagesTest do
 
       insert(:goal, %{site: site, event_name: "Payment", currency: :USD})
 
-      filters = Jason.encode!([[:is, "event:goal", ["Payment"]]])
-      order_by = Jason.encode!([["visitors", "desc"]])
-
-      q = "?filters=#{filters}&order_by=#{order_by}&detailed=true&period=day&page=1&limit=100"
-
-      conn =
-        get(
-          conn,
-          "/api/stats/#{site.domain}/pages#{q}"
+      response =
+        query_pages(conn, site,
+          date_range: "day",
+          filters: [["is", "event:goal", ["Payment"]]],
+          metrics: [
+            "visitors",
+            "group_conversion_rate",
+            "total_visitors",
+            "average_revenue",
+            "total_revenue"
+          ]
         )
 
-      assert json_response(conn, 200)["results"] == [
+      assert response["results"] == [
                %{
-                 "average_revenue" => %{
-                   "currency" => "USD",
-                   "long" => "$0.00",
-                   "short" => "$0.0",
-                   "value" => 0.0
-                 },
-                 "conversion_rate" => 100.0,
-                 "name" => "/nopay",
-                 "total_revenue" => %{
-                   "currency" => "USD",
-                   "long" => "$0.00",
-                   "short" => "$0.0",
-                   "value" => 0.0
-                 },
-                 "total_visitors" => 3,
-                 "visitors" => 3
+                 "dimensions" => ["/nopay"],
+                 "metrics" => [
+                   3,
+                   100.0,
+                   3,
+                   %{"currency" => "USD", "long" => "$0.00", "short" => "$0.0", "value" => 0.0},
+                   %{"currency" => "USD", "long" => "$0.00", "short" => "$0.0", "value" => 0.0}
+                 ]
                },
                %{
-                 "average_revenue" => %{
-                   "currency" => "USD",
-                   "long" => "$1,500.00",
-                   "short" => "$1.5K",
-                   "value" => 1500.0
-                 },
-                 "conversion_rate" => 100.0,
-                 "name" => "/purchase/first",
-                 "total_revenue" => %{
-                   "currency" => "USD",
-                   "long" => "$3,000.00",
-                   "short" => "$3.0K",
-                   "value" => 3000.0
-                 },
-                 "total_visitors" => 2,
-                 "visitors" => 2
+                 "dimensions" => ["/purchase/first"],
+                 "metrics" => [
+                   2,
+                   100.0,
+                   2,
+                   %{
+                     "currency" => "USD",
+                     "long" => "$1,500.00",
+                     "short" => "$1.5K",
+                     "value" => 1500.0
+                   },
+                   %{
+                     "currency" => "USD",
+                     "long" => "$3,000.00",
+                     "short" => "$3.0K",
+                     "value" => 3000.0
+                   }
+                 ]
                },
                %{
-                 "average_revenue" => %{
-                   "currency" => "USD",
-                   "long" => "$3,500.00",
-                   "short" => "$3.5K",
-                   "value" => 3500.0
-                 },
-                 "conversion_rate" => 100.0,
-                 "name" => "/purchase/second",
-                 "total_revenue" => %{
-                   "currency" => "USD",
-                   "long" => "$7,000.00",
-                   "short" => "$7.0K",
-                   "value" => 7000.0
-                 },
-                 "total_visitors" => 1,
-                 "visitors" => 1
+                 "dimensions" => ["/purchase/second"],
+                 "metrics" => [
+                   1,
+                   100.0,
+                   1,
+                   %{
+                     "currency" => "USD",
+                     "long" => "$3,500.00",
+                     "short" => "$3.5K",
+                     "value" => 3500.0
+                   },
+                   %{
+                     "currency" => "USD",
+                     "long" => "$7,000.00",
+                     "short" => "$7.0K",
+                     "value" => 7000.0
+                   }
+                 ]
                },
                %{
-                 "average_revenue" => %{
-                   "currency" => "USD",
-                   "long" => "$2,500.00",
-                   "short" => "$2.5K",
-                   "value" => 2500.0
-                 },
-                 "conversion_rate" => 100.0,
-                 "name" => "/purchase/third",
-                 "total_revenue" => %{
-                   "currency" => "USD",
-                   "long" => "$2,500.00",
-                   "short" => "$2.5K",
-                   "value" => 2500.0
-                 },
-                 "total_visitors" => 1,
-                 "visitors" => 1
+                 "dimensions" => ["/purchase/third"],
+                 "metrics" => [
+                   1,
+                   100.0,
+                   1,
+                   %{
+                     "currency" => "USD",
+                     "long" => "$2,500.00",
+                     "short" => "$2.5K",
+                     "value" => 2500.0
+                   },
+                   %{
+                     "currency" => "USD",
+                     "long" => "$2,500.00",
+                     "short" => "$2.5K",
+                     "value" => 2500.0
+                   }
+                 ]
                }
              ]
     end

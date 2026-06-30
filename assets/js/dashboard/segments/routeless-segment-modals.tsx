@@ -5,7 +5,7 @@ import {
   UpdateSegmentModal
 } from './segment-modals'
 import {
-  getSearchToApplySingleSegmentFilter,
+  getSearchToSetSegmentFilter,
   getSegmentNamePlaceholder,
   handleSegmentResponse,
   SavedSegment,
@@ -16,7 +16,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useSiteContext } from '../site-context'
 import { cleanLabels, remapToApiFilters } from '../util/filters'
 import { useAppNavigate } from '../navigation/use-app-navigate'
-import { useQueryContext } from '../query-context'
+import { useDashboardStateContext } from '../dashboard-state-context'
 import { useUserContext } from '../user-context'
 import { mutation } from '../api'
 import { useRoutelessModalsContext } from '../navigation/routeless-modals-context'
@@ -30,7 +30,7 @@ export const RoutelessSegmentModals = () => {
   const queryClient = useQueryClient()
   const site = useSiteContext()
   const { modal, setModal } = useRoutelessModalsContext()
-  const { query, expandedSegment } = useQueryContext()
+  const { dashboardState, expandedSegment } = useDashboardStateContext()
   const user = useUserContext()
 
   const patchSegment = useMutation({
@@ -67,7 +67,9 @@ export const RoutelessSegmentModals = () => {
       updateOne(segment)
       queryClient.invalidateQueries({ queryKey: ['segments'] })
       navigate({
-        search: getSearchToApplySingleSegmentFilter(segment),
+        search: getSearchToSetSegmentFilter(segment, {
+          omitAllOtherFilters: true
+        }),
         state: {
           expandedSegment: null
         }
@@ -104,7 +106,9 @@ export const RoutelessSegmentModals = () => {
       addOne(segment)
       queryClient.invalidateQueries({ queryKey: ['segments'] })
       navigate({
-        search: getSearchToApplySingleSegmentFilter(segment),
+        search: getSearchToSetSegmentFilter(segment, {
+          omitAllOtherFilters: true
+        }),
         state: {
           expandedSegment: null
         }
@@ -154,7 +158,7 @@ export const RoutelessSegmentModals = () => {
           user={user}
           siteSegmentsAvailable={site.siteSegmentsAvailable}
           segment={expandedSegment}
-          namePlaceholder={getSegmentNamePlaceholder(query)}
+          namePlaceholder={getSegmentNamePlaceholder(dashboardState)}
           onClose={() => {
             setModal(null)
             patchSegment.reset()
@@ -165,8 +169,8 @@ export const RoutelessSegmentModals = () => {
               name,
               type,
               segment_data: {
-                filters: query.filters,
-                labels: query.labels
+                filters: dashboardState.filters,
+                labels: dashboardState.labels
               }
             })
           }
@@ -179,7 +183,7 @@ export const RoutelessSegmentModals = () => {
         <CreateSegmentModal
           user={user}
           siteSegmentsAvailable={site.siteSegmentsAvailable}
-          namePlaceholder={getSegmentNamePlaceholder(query)}
+          namePlaceholder={getSegmentNamePlaceholder(dashboardState)}
           segment={expandedSegment ?? undefined}
           onClose={() => {
             setModal(null)
@@ -190,8 +194,8 @@ export const RoutelessSegmentModals = () => {
               name,
               type,
               segment_data: {
-                filters: query.filters,
-                labels: query.labels
+                filters: dashboardState.filters,
+                labels: dashboardState.labels
               }
             })
           }

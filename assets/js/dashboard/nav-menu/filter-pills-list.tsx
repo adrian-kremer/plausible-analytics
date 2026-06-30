@@ -1,5 +1,5 @@
 import React, { DetailedHTMLProps, HTMLAttributes } from 'react'
-import { useQueryContext } from '../query-context'
+import { useDashboardStateContext } from '../dashboard-state-context'
 import { FilterPill, FilterPillProps } from './filter-pill'
 import {
   cleanLabels,
@@ -10,8 +10,10 @@ import { styledFilterText, plainFilterText } from '../util/filter-text'
 import { useAppNavigate } from '../navigation/use-app-navigate'
 import classNames from 'classnames'
 import { filterRoute } from '../router'
+import { canRemoveFilter } from '../filtering/segments'
+import { useSegmentsContext } from '../filtering/segments-context'
 
-export const PILL_X_GAP_PX = 16
+export const PILL_X_GAP_PX = 10
 export const PILL_Y_GAP_PX = 8
 
 type SliceStartEnd = {
@@ -47,13 +49,14 @@ export const AppliedFilterPillsList = React.forwardRef<
   HTMLDivElement,
   AppliedFilterPillsListProps
 >(({ className, style, slice, direction, pillClassName }, ref) => {
-  const { query } = useQueryContext()
+  const { dashboardState } = useDashboardStateContext()
+  const { limitedToSegment } = useSegmentsContext()
   const navigate = useAppNavigate()
 
   const renderableFilters =
     slice?.type === 'no-render-outside'
-      ? query.filters.slice(slice.start, slice.end)
-      : query.filters
+      ? dashboardState.filters.slice(slice.start, slice.end)
+      : dashboardState.filters
 
   const indexAdjustment =
     slice?.type === 'no-render-outside' ? (slice.start ?? 0) : 0
@@ -61,7 +64,7 @@ export const AppliedFilterPillsList = React.forwardRef<
   const isInvisible = (index: number) => {
     return slice?.type === 'invisible-outside'
       ? index < (slice.start ?? 0) ||
-          index > (slice.end ?? query.filters.length) - 1
+          index > (slice.end ?? dashboardState.filters.length) - 1
       : false
   }
 
@@ -69,8 +72,8 @@ export const AppliedFilterPillsList = React.forwardRef<
     <FilterPillsList
       pills={renderableFilters.map((filter, index) => ({
         className: classNames(isInvisible(index) && 'invisible', pillClassName),
-        plainText: plainFilterText(query, filter),
-        children: styledFilterText(query, filter),
+        plainText: plainFilterText(dashboardState, filter),
+        children: styledFilterText(dashboardState, filter),
         interactive: {
           navigationTarget: {
             path: filterRoute.path,
@@ -82,19 +85,21 @@ export const AppliedFilterPillsList = React.forwardRef<
                 ]
             }
           },
-          onRemoveClick: () => {
-            const newFilters = query.filters.filter(
-              (_, i) => i !== index + indexAdjustment
-            )
+          onRemoveClick: canRemoveFilter(filter, limitedToSegment)
+            ? () => {
+                const newFilters = dashboardState.filters.filter(
+                  (_, i) => i !== index + indexAdjustment
+                )
 
-            navigate({
-              search: (search) => ({
-                ...search,
-                filters: newFilters,
-                labels: cleanLabels(newFilters, query.labels)
-              })
-            })
-          }
+                navigate({
+                  search: (searchRecord) => ({
+                    ...searchRecord,
+                    filters: newFilters,
+                    labels: cleanLabels(newFilters, dashboardState.labels)
+                  })
+                })
+              }
+            : undefined
         }
       }))}
       className={className}

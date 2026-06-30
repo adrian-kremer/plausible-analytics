@@ -6,7 +6,7 @@ defmodule PlausibleWeb.Live.FunnelSettings do
 
   use Plausible.Funnel
 
-  alias Plausible.{Goals, Funnels}
+  alias Plausible.{Goals, Funnels, Teams}
 
   def mount(
         _params,
@@ -34,7 +34,7 @@ defmodule PlausibleWeb.Live.FunnelSettings do
 
     {:ok,
      assign(socket,
-       site_team: socket.assigns.site.team,
+       site_team: Teams.with_subscription(socket.assigns.site.team),
        domain: domain,
        displayed_funnels: socket.assigns.all_funnels,
        setup_funnel?: false,
@@ -57,7 +57,7 @@ defmodule PlausibleWeb.Live.FunnelSettings do
         show_content?={!Plausible.Billing.Feature.Funnels.opted_out?(@site)}
         site={@site}
         current_user={@current_user}
-        current_team={@current_team}
+        current_team={@site_team}
       >
         <:title>
           Funnels

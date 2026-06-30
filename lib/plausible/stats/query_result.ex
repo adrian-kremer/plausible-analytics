@@ -8,46 +8,12 @@ defmodule Plausible.Stats.QueryResult do
   """
 
   use Plausible
-  alias Plausible.Stats.{DateTimeRange, Query, QueryRunner}
+  alias Plausible.Stats.{Query, QueryRunner, Filters}
 
   defstruct results: [],
+            comparison_results: nil,
             meta: %{},
             query: nil
-
-  @doc """
-  Builds full JSON-serializable query response.
-
-  `results` should already-built by Plausible.Stats.QueryRunner
-  """
-  def from(%QueryRunner{site: site, main_query: query, results: results} = runner) do
-    struct!(
-      __MODULE__,
-      results: results,
-      meta: meta(runner) |> Enum.sort_by(&elem(&1, 0)) |> Jason.OrderedObject.new(),
-      query:
-        Jason.OrderedObject.new(
-          site_id: site.domain,
-          metrics: query.metrics,
-          date_range: [
-            to_iso8601(query.utc_time_range.first, query.timezone),
-            to_iso8601(query.utc_time_range.last, query.timezone)
-          ],
-          filters: query.filters,
-          dimensions: query.dimensions,
-          order_by: query.order_by |> Enum.map(&Tuple.to_list/1),
-          include: include(query) |> Map.filter(fn {_key, val} -> val end),
-          pagination: query.pagination
-        )
-    )
-  end
-
-  defp meta(%QueryRunner{} = runner) do
-    %{}
-    |> add_imports_meta(runner.main_query)
-    |> add_metric_warnings_meta(runner.main_query)
-    |> add_time_labels_meta(runner.main_query)
-    |> add_total_rows_meta(runner.main_query, runner.total_rows)
-  end
 
   @imports_warnings %{
     unsupported_query:
@@ -56,6 +22,53 @@ defmodule Plausible.Stats.QueryResult do
     unsupported_interval:
       "Imported stats are not included because the time dimension (i.e. the interval) is too short."
   }
+
+  def imports_warnings(), do: @imports_warnings
+
+  @no_imported_scroll_depth_warning %{
+    code: :no_imported_scroll_depth,
+    warning: "No imports with scroll depth data were found"
+  }
+
+  def no_imported_scroll_depth_warning(), do: @no_imported_scroll_depth_warning
+
+  @no_imported_bounce_rate_warning %{
+    code: :no_imported_bounce_rate,
+    warning: "imported bounce_rate is not available when using a page filter"
+  }
+
+  def no_imported_bounce_rate_warning(), do: @no_imported_bounce_rate_warning
+
+  @doc """
+  Builds full JSON-serializable query response.
+
+  `results` should already-built by Plausible.Stats.QueryRunner
+  """
+  def from(%QueryRunner{results: results, comparison_results: comparison_results} = runner) do
+    struct!(
+      __MODULE__,
+      results: results,
+      comparison_results: comparison_results,
+      meta: meta(runner) |> Jason.OrderedObject.new(),
+      query: query(runner) |> Jason.OrderedObject.new()
+    )
+  end
+
+  defp meta(%QueryRunner{} = runner) do
+    %{}
+    |> add_imports_meta(runner.main_query)
+    |> add_metric_warnings_meta(runner.main_query)
+    |> add_empty_metrics_meta(runner.main_query)
+    |> add_time_labels_meta(runner)
+    |> add_time_labels_result_indices_meta(runner)
+    |> add_comparison_time_labels_meta(runner)
+    |> add_comparison_time_label_result_indices_meta(runner)
+    |> add_present_index_meta(runner.main_query)
+    |> add_partial_time_labels_meta(runner.main_query)
+    |> add_comparison_partial_time_labels_meta(runner)
+    |> add_total_rows_meta(runner.main_query, runner.total_rows)
+    |> Enum.sort_by(&elem(&1, 0))
+  end
 
   defp add_imports_meta(meta, %Query{include: include} = query) do
     if include.imports or include.imports_meta do
@@ -81,9 +94,102 @@ defmodule Plausible.Stats.QueryResult do
     end
   end
 
-  defp add_time_labels_meta(meta, query) do
+  defp add_empty_metrics_meta(meta, query) do
+    if query.include.empty_metrics and "event:goal" not in query.dimensions do
+      Map.put(
+        meta,
+        :empty_metrics,
+        Enum.map(query.metrics, &Plausible.Stats.Metrics.default_value(&1, query))
+      )
+    else
+      meta
+    end
+  end
+
+  defp add_time_labels_meta(meta, %QueryRunner{main_query: query}) do
     if query.include.time_labels do
       Map.put(meta, :time_labels, Plausible.Stats.Time.time_labels(query))
+    else
+      meta
+    end
+  end
+
+  defp add_comparison_time_labels_meta(meta, %QueryRunner{main_query: query} = runner) do
+    if query.include.time_labels && query.include.compare do
+      Map.put(
+        meta,
+        :comparison_time_labels,
+        Plausible.Stats.Time.time_labels(runner.comparison_query)
+      )
+    else
+      meta
+    end
+  end
+
+  defp add_time_labels_result_indices_meta(meta, %QueryRunner{main_query: query} = runner) do
+    time_labels = meta[:time_labels]
+
+    if query.include.time_label_result_indices and is_list(time_labels) do
+      Map.put(
+        meta,
+        :time_label_result_indices,
+        result_indices_for_time_labels(time_labels, runner.main_results)
+      )
+    else
+      meta
+    end
+  end
+
+  defp add_comparison_time_label_result_indices_meta(
+         meta,
+         %QueryRunner{main_query: query} = runner
+       ) do
+    comp_time_labels = meta[:comparison_time_labels]
+
+    if query.include.time_label_result_indices and is_list(comp_time_labels) do
+      Map.put(
+        meta,
+        :comparison_time_label_result_indices,
+        result_indices_for_time_labels(comp_time_labels, runner.comparison_results)
+      )
+    else
+      meta
+    end
+  end
+
+  defp add_present_index_meta(meta, query) do
+    time_labels = meta[:time_labels]
+
+    if query.include.present_index and is_list(time_labels) do
+      Map.put(meta, :present_index, Plausible.Stats.Time.present_index(time_labels, query))
+    else
+      meta
+    end
+  end
+
+  defp add_partial_time_labels_meta(meta, query) do
+    time_labels = meta[:time_labels]
+
+    if query.include.partial_time_labels and is_list(time_labels) do
+      Map.put(
+        meta,
+        :partial_time_labels,
+        Plausible.Stats.Time.partial_time_labels(time_labels, query)
+      )
+    else
+      meta
+    end
+  end
+
+  defp add_comparison_partial_time_labels_meta(meta, %QueryRunner{main_query: query} = runner) do
+    comparison_time_labels = meta[:comparison_time_labels]
+
+    if query.include.partial_time_labels and is_list(comparison_time_labels) do
+      Map.put(
+        meta,
+        :comparison_partial_time_labels,
+        Plausible.Stats.Time.partial_time_labels(comparison_time_labels, runner.comparison_query)
+      )
     else
       meta
     end
@@ -97,18 +203,39 @@ defmodule Plausible.Stats.QueryResult do
     end
   end
 
-  defp include(query) do
-    case get_in(query.include, [:comparisons, :date_range]) do
-      %DateTimeRange{first: first, last: last} ->
-        query.include
-        |> put_in([:comparisons, :date_range], [
-          to_iso8601(first, query.timezone),
-          to_iso8601(last, query.timezone)
-        ])
+  defp query(%QueryRunner{site: site, main_query: query}) do
+    [
+      site_id: site.domain,
+      metrics: query.metrics,
+      date_range: [
+        to_iso8601(query.utc_time_range.first, query.timezone),
+        to_iso8601(query.utc_time_range.last, query.timezone)
+      ],
+      comparison_date_range:
+        if(query.include.compare,
+          do: [
+            to_iso8601(query.comparison_utc_time_range.first, query.timezone),
+            to_iso8601(query.comparison_utc_time_range.last, query.timezone)
+          ]
+        ),
+      filters: query.filters,
+      dimensions: query.dimensions,
+      order_by: query.order_by |> Enum.map(&Tuple.to_list/1),
+      include: include(query) |> Map.filter(fn {_key, val} -> val end),
+      pagination: query.pagination
+    ]
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+  end
 
-      nil ->
+  defp include(query) do
+    case query.include.compare do
+      {:date_range, first, last} ->
+        struct!(query.include, compare: [Date.to_iso8601(first), Date.to_iso8601(last)])
+
+      _ ->
         query.include
     end
+    |> Map.from_struct()
   end
 
   defp metric_warnings(%Query{} = query) do
@@ -145,14 +272,9 @@ defmodule Plausible.Stats.QueryResult do
     end
   end
 
-  @no_imported_scroll_depth_metric_warning %{
-    code: :no_imported_scroll_depth,
-    warning: "No imports with scroll depth data were found"
-  }
-
   defp metric_warning(:scroll_depth, %Query{} = query) do
     if query.include_imported and not Enum.any?(query.imports_in_range, & &1.has_scroll_depth) do
-      @no_imported_scroll_depth_metric_warning
+      @no_imported_scroll_depth_warning
     end
   end
 
@@ -173,7 +295,30 @@ defmodule Plausible.Stats.QueryResult do
     end
   end
 
+  # Native queries (i.e. ones that don't include imported data) allow querying bounce rate
+  # with an `event:page` filter or dimension. In those cases, an `event:page` gets treated
+  # as `visit:entry_page`. While theoretically possible, this behaviour does not yet exist
+  # for imported data, which is why we're returning a metric warning here.
+  defp metric_warning(:bounce_rate, %Query{} = query) do
+    page_filter_or_dimension? =
+      Filters.filtering_on_dimension?(query, "event:page", behavioral_filters: :ignore) or
+        "event:page" in query.dimensions
+
+    if query.include_imported and page_filter_or_dimension? do
+      @no_imported_bounce_rate_warning
+    end
+  end
+
   defp metric_warning(_metric, _query), do: nil
+
+  defp result_indices_for_time_labels(time_labels, results_list) do
+    index_lookup_map =
+      results_list
+      |> Enum.with_index()
+      |> Map.new(fn {%{dimensions: [dim]}, idx} -> {dim, idx} end)
+
+    Enum.map(time_labels, &Map.get(index_lookup_map, &1))
+  end
 
   defp to_iso8601(datetime, timezone) do
     datetime
@@ -183,8 +328,25 @@ defmodule Plausible.Stats.QueryResult do
 end
 
 defimpl Jason.Encoder, for: Plausible.Stats.QueryResult do
-  def encode(%Plausible.Stats.QueryResult{results: results, meta: meta, query: query}, opts) do
-    Jason.OrderedObject.new(results: results, meta: meta, query: query)
+  def encode(
+        %Plausible.Stats.QueryResult{
+          results: results,
+          comparison_results: comparison_results,
+          meta: meta,
+          query: query
+        },
+        opts
+      ) do
+    if comparison_results do
+      Jason.OrderedObject.new(
+        results: results,
+        comparison_results: comparison_results,
+        meta: meta,
+        query: query
+      )
+    else
+      Jason.OrderedObject.new(results: results, meta: meta, query: query)
+    end
     |> Jason.Encoder.encode(opts)
   end
 end

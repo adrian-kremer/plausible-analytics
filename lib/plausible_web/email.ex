@@ -1,4 +1,8 @@
 defmodule PlausibleWeb.Email do
+  @moduledoc """
+  Email template rendering functions.
+  """
+
   use Plausible
   import Bamboo.Email
   import Bamboo.PostmarkHelper
@@ -52,7 +56,7 @@ defmodule PlausibleWeb.Email do
     # )
   end
 
-  def site_setup_success(user, team, site) do
+  def site_setup_success(user, site) do
     # Diese E-Mail wurde deaktiviert
     nil
     
@@ -62,8 +66,7 @@ defmodule PlausibleWeb.Email do
     # |> subject("Analytics verfolgt jetzt Ihre Website-Statistiken")
     # |> render("site_setup_success_email.html",
     #   user: user,
-    #   site: site,
-    #   site_team: team
+    #   site: site
     # )
   end
 
@@ -113,18 +116,34 @@ defmodule PlausibleWeb.Email do
     # |> render("trial_one_week_reminder.html", user: user, team: team)
   end
 
-  def trial_upgrade_email(user, team, day, usage, suggested_volume) do
+  def trial_ending_tomorrow_email(user, team, usage, suggested_volume) do
     # Diese E-Mail wurde deaktiviert
     nil
     
     # base_email()
     # |> to(user)
-    # |> tag("trial-upgrade-email")
-    # |> subject("Ihre Analytics-Testversion endet #{day}")
-    # |> render("trial_upgrade_email.html",
+    # |> tag("trial-ending-tomorrow")
+    # |> subject("Ihre Analytics-Testversion endet morgen")
+    # |> render("trial_ending_tomorrow.html",
     #   user: user,
     #   team: team,
-    #   day: day,
+    #   custom_events: usage.custom_events,
+    #   usage: usage.total,
+    #   suggested_volume: suggested_volume
+    # )
+  end
+
+  def trial_ending_today_email(user, team, usage, suggested_volume) do
+    # Diese E-Mail wurde deaktiviert
+    nil
+    
+    # base_email()
+    # |> to(user)
+    # |> tag("trial-ending-today")
+    # |> subject("Ihre Analytics-Testversion endet heute")
+    # |> render("trial_ending_today.html",
+    #   user: user,
+    #   team: team,
     #   custom_events: usage.custom_events,
     #   usage: usage.total,
     #   suggested_volume: suggested_volume
@@ -665,9 +684,12 @@ defmodule PlausibleWeb.Email do
   end
 
   defp textify(html) do
-    Floki.parse_fragment!(html)
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.to_tree()
     |> traverse_and_textify()
-    |> Floki.text()
+    |> LazyHTML.from_tree()
+    |> LazyHTML.text()
     |> collapse_whitespace()
   end
 
@@ -684,7 +706,7 @@ defmodule PlausibleWeb.Email do
     children = traverse_and_textify(children)
 
     if href do
-      text = Floki.text(children)
+      text = children |> LazyHTML.from_tree() |> LazyHTML.text()
 
       if text == href do
         # avoids rendering "http://localhost:8000 (http://localhost:8000)" in base_email footer
@@ -695,6 +717,10 @@ defmodule PlausibleWeb.Email do
     else
       {tag, attrs, children}
     end
+  end
+
+  defp traverse_and_textify({"br", _attrs, _children}) do
+    "\n"
   end
 
   defp traverse_and_textify({tag, attrs, children}) do

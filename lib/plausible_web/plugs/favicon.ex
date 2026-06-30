@@ -34,12 +34,25 @@ defmodule PlausibleWeb.Favicon do
   @external_resource @placeholder_icon_location
   @custom_icons %{
     "Brave" => "search.brave.com",
+    "Kagi" => "kagi.com",
     "Sogou" => "sogou.com",
     "Wikipedia" => "en.wikipedia.org",
     "Discord" => "discord.com",
     "Perplexity" => "perplexity.ai",
     "Microsoft Teams" => "microsoft.com",
-    "LinkedIn" => "linkedin.com"
+    "LinkedIn" => "linkedin.com",
+    "Linktree" => "linktr.ee",
+    "Bluesky" => "bsky.app",
+    "Mastodon" => "mastodon.social",
+    "Google Gemini" => "gemini.google.com",
+    "ChatGPT" => "chatgpt.com",
+    "Claude" => "claude.ai",
+    "Phind" => "phind.com",
+    "DeepSeek" => "deepseek.com",
+    "Microsoft Copilot" => "copilot.com",
+    "Grok" => "grok.com",
+    "X (Twitter)" => "x.com",
+    "Microsoft 365" => "office.com"
   }
 
   def init(_) do
@@ -130,7 +143,7 @@ defmodule PlausibleWeb.Favicon do
   end
 
   @forwarded_headers ["content-type", "cache-control", "expires"]
-  defp forward_headers(conn, headers) do
+  defp forward_headers(%Plug.Conn{} = conn, headers) do
     headers_to_forward = Enum.filter(headers, fn {k, _} -> k in @forwarded_headers end)
     %Plug.Conn{conn | resp_headers: headers_to_forward}
   end

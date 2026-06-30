@@ -45,11 +45,39 @@ defmodule PlausibleWeb.Live.GoalSettingsTest do
 
       assert g3.currency
       assert resp =~ to_string(g3)
-      assert resp =~ "Upgrade Required"
+      assert text_of_element(resp, ~s/[data-test-id="feature-unavailable-cta"]/) =~ "Upgrade"
 
-      refute element_exists?(
+      assert element_exists?(
                resp,
-               ~s/button[phx-click="edit-goal"][phx-value-goal-id="#{g3.id}"][disabled]#edit-goal-#{g3.id}/
+               ~s/button[data-test-id="edit-goal-button"][disabled]/
+             )
+    end
+
+    @tag :ee_only
+    test "lists goals with custom props with feature availability annotation if the plan does not cover them",
+         %{conn: conn, user: user, site: site} do
+      {:ok, goal_with_props} =
+        Plausible.Goals.create(site, %{
+          "event_name" => "Signup",
+          "custom_props" => %{"plan" => "premium"}
+        })
+
+      user
+      |> team_of()
+      |> Plausible.Teams.Team.end_trial()
+      |> Plausible.Repo.update!()
+
+      conn = get(conn, "/#{site.domain}/settings/goals")
+
+      resp = html_response(conn, 200)
+
+      assert Plausible.Goal.has_custom_props?(goal_with_props)
+      assert resp =~ to_string(goal_with_props)
+      assert text_of_element(resp, ~s/[data-test-id="feature-unavailable-cta"]/) =~ "Upgrade"
+
+      assert element_exists?(
+               resp,
+               ~s/button[data-test-id="edit-goal-button"][disabled]/
              )
     end
 
@@ -66,7 +94,7 @@ defmodule PlausibleWeb.Live.GoalSettingsTest do
 
         assert element_exists?(
                  resp,
-                 ~s/button[phx-click="edit-goal"][phx-value-goal-id="#{g.id}"]#edit-goal-#{g.id}/
+                 ~s/button[data-test-id="edit-goal-button"][phx-click="edit-goal"][phx-value-goal-id="#{g.id}"]:not([disabled])#edit-goal-#{g.id}/
                )
       end
     end
@@ -245,53 +273,6 @@ defmodule PlausibleWeb.Live.GoalSettingsTest do
       html = lv |> element(~s/a#reset-filter-hint/) |> render_click()
 
       refute html =~ "No goals found for this site. Please refine or"
-    end
-
-    test "auto-configuring custom event goals", %{conn: conn, site: site} do
-      populate_stats(site, [
-        build(:event, name: "Signup"),
-        build(:event, name: "Newsletter Signup"),
-        build(:event, name: "Purchase")
-      ])
-
-      autoconfigure_button_selector = ~s/button[phx-click="autoconfigure"]/
-
-      assert_suggested_event_name_count = fn html, number ->
-        assert text_of_element(html, autoconfigure_button_selector) =~
-                 "found #{number} custom events from the last 6 months that are not yet configured as goals"
-      end
-
-      {lv, html} = get_liveview(conn, site, with_html?: true)
-
-      # At first, 3 event names are suggested
-      assert_suggested_event_name_count.(html, 3)
-
-      # Add one goal
-      lv
-      |> element("#goals-form-modal form")
-      |> render_submit(%{goal: %{event_name: "Signup"}})
-
-      html = render(lv)
-
-      # Now two goals are suggested because one is already added
-      assert_suggested_event_name_count.(html, 2)
-
-      # Delete the goal
-      goal = Plausible.Repo.get_by(Plausible.Goal, site_id: site.id, event_name: "Signup")
-      html = lv |> element(~s/button#delete-goal-#{goal.id}/) |> render_click()
-
-      # Suggested event name count should be 3 again
-      assert_suggested_event_name_count.(html, 3)
-
-      # Autoconfigure all custom event goals
-      lv
-      |> element(autoconfigure_button_selector)
-      |> render_click()
-
-      html = render(lv)
-
-      # All possible goals exist - no suggestions anymore
-      refute html =~ "from the last 6 months"
     end
   end
 

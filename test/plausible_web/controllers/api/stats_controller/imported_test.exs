@@ -3,6 +3,12 @@ defmodule PlausibleWeb.Api.StatsController.ImportedTest do
 
   @user_id Enum.random(1000..9999)
 
+  defp do_query(conn, site, params) do
+    conn
+    |> post("/api/stats/#{site.domain}/query", params)
+    |> json_response(200)
+  end
+
   defp import_data(ga_data, site_id, import_id, table_name) do
     ga_data
     |> Plausible.Imported.GoogleAnalytics4.from_report(site_id, import_id, table_name)
@@ -73,18 +79,22 @@ defmodule PlausibleWeb.Api.StatsController.ImportedTest do
           "imported_visitors"
         )
 
-        conn =
-          get(
-            conn,
-            "/api/stats/#{site.domain}/main-graph?period=month&date=2021-01-01&with_imported=true"
-          )
+        params = %{
+          "date_range" => "month",
+          "metrics" => ["visitors"],
+          "relative_date" => "2021-01-01",
+          "dimensions" => ["time:day"],
+          "include" => %{"imports" => true, "time_labels" => true}
+        }
 
-        assert %{"plot" => plot} = json_response(conn, 200)
+        response = do_query(conn, site, params)
 
-        assert Enum.count(plot) == 31
-        assert List.first(plot) == 2
-        assert List.last(plot) == 2
-        assert Enum.sum(plot) == 4
+        assert length(response["meta"]["time_labels"]) == 31
+
+        assert response["results"] == [
+                 %{"dimensions" => ["2021-01-01"], "metrics" => [2]},
+                 %{"dimensions" => ["2021-01-31"], "metrics" => [2]}
+               ]
       end
 
       test "returns data grouped by week", %{conn: conn, site: site, import_id: import_id} do
@@ -121,18 +131,22 @@ defmodule PlausibleWeb.Api.StatsController.ImportedTest do
           "imported_visitors"
         )
 
-        conn =
-          get(
-            conn,
-            "/api/stats/#{site.domain}/main-graph?period=month&date=2021-01-01&with_imported=true&interval=week"
-          )
+        params = %{
+          "date_range" => "month",
+          "metrics" => ["visitors"],
+          "relative_date" => "2021-01-01",
+          "dimensions" => ["time:week"],
+          "include" => %{"imports" => true, "time_labels" => true}
+        }
 
-        assert %{"plot" => plot} = json_response(conn, 200)
+        response = do_query(conn, site, params)
 
-        assert Enum.count(plot) == 5
-        assert List.first(plot) == 2
-        assert List.last(plot) == 2
-        assert Enum.sum(plot) == 4
+        assert length(response["meta"]["time_labels"]) == 5
+
+        assert response["results"] == [
+                 %{"dimensions" => ["2021-01-01"], "metrics" => [2]},
+                 %{"dimensions" => ["2021-01-25"], "metrics" => [2]}
+               ]
       end
 
       test "Sources are imported", %{conn: conn, site: site, import_id: import_id} do
@@ -152,6 +166,15 @@ defmodule PlausibleWeb.Api.StatsController.ImportedTest do
             referrer: "duckduckgo.com",
             timestamp: ~N[2021-01-01 00:00:00]
           )
+        ])
+
+        populate_stats(site, import_id, [
+          build(:imported_visitors, date: ~D[2021-01-01]),
+          build(:imported_visitors, date: ~D[2021-01-01]),
+          build(:imported_visitors, date: ~D[2021-01-01]),
+          build(:imported_visitors, date: ~D[2021-01-01]),
+          build(:imported_visitors, date: ~D[2021-01-31]),
+          build(:imported_visitors, date: ~D[2021-01-31])
         ])
 
         import_data(
@@ -270,21 +293,21 @@ defmodule PlausibleWeb.Api.StatsController.ImportedTest do
           "imported_sources"
         )
 
-        results =
-          conn
-          |> get(
-            "/api/stats/#{site.domain}/sources?period=month&date=2021-01-01&with_imported=true"
-          )
-          |> json_response(200)
-          |> Map.get("results")
-          |> Enum.sort()
+        response =
+          do_query(conn, site, %{
+            "date_range" => ["2021-01-01", "2021-01-31"],
+            "dimensions" => ["visit:source"],
+            "metrics" => ["visitors", "percentage"],
+            "order_by" => [["visit:source", "asc"]],
+            "include" => %{"imports" => true}
+          })
 
-        assert results == [
-                 %{"name" => "A Nice Newsletter", "visitors" => 1},
-                 %{"name" => "Direct / None", "visitors" => 1},
-                 %{"name" => "DuckDuckGo", "visitors" => 2},
-                 %{"name" => "Google", "visitors" => 4},
-                 %{"name" => "Twitter", "visitors" => 1}
+        assert response["results"] == [
+                 %{"dimensions" => ["A Nice Newsletter"], "metrics" => [1, 11.11]},
+                 %{"dimensions" => ["Direct / None"], "metrics" => [1, 11.11]},
+                 %{"dimensions" => ["DuckDuckGo"], "metrics" => [2, 22.22]},
+                 %{"dimensions" => ["Google"], "metrics" => [4, 44.44]},
+                 %{"dimensions" => ["X (Twitter)"], "metrics" => [1, 11.11]}
                ]
       end
 
@@ -405,20 +428,20 @@ defmodule PlausibleWeb.Api.StatsController.ImportedTest do
           "imported_sources"
         )
 
-        results =
-          conn
-          |> get(
-            "/api/stats/#{site.domain}/channels?period=month&date=2021-01-01&with_imported=true"
-          )
-          |> json_response(200)
-          |> Map.get("results")
-          |> Enum.sort()
+        response =
+          do_query(conn, site, %{
+            "date_range" => ["2021-01-01", "2021-01-31"],
+            "dimensions" => ["visit:channel"],
+            "metrics" => ["visitors", "percentage"],
+            "order_by" => [["visit:channel", "asc"]],
+            "include" => %{"imports" => true}
+          })
 
-        assert results == [
-                 %{"name" => "(not set)", "visitors" => 1},
-                 %{"name" => "Direct", "visitors" => 2},
-                 %{"name" => "Organic Search", "visitors" => 3},
-                 %{"name" => "Paid Search", "visitors" => 2}
+        assert response["results"] == [
+                 %{"dimensions" => ["(not set)"], "metrics" => [1, 33.33]},
+                 %{"dimensions" => ["Direct"], "metrics" => [2, 66.67]},
+                 %{"dimensions" => ["Organic Search"], "metrics" => [3, 100.0]},
+                 %{"dimensions" => ["Paid Search"], "metrics" => [2, 66.67]}
                ]
       end
 
@@ -482,18 +505,19 @@ defmodule PlausibleWeb.Api.StatsController.ImportedTest do
           "imported_sources"
         )
 
-        conn =
-          get(
-            conn,
-            "/api/stats/#{site.domain}/utm_mediums?period=day&date=2021-01-01&with_imported=true"
-          )
+        response =
+          do_query(conn, site, %{
+            "date_range" => ["2021-01-01", "2021-01-01"],
+            "dimensions" => ["visit:utm_medium"],
+            "filters" => [["is_not", "visit:utm_medium", [""]]],
+            "metrics" => ["visitors", "bounce_rate", "visit_duration", "percentage"],
+            "include" => %{"imports" => true}
+          })
 
-        assert json_response(conn, 200)["results"] == [
+        assert response["results"] == [
                  %{
-                   "bounce_rate" => 100.0,
-                   "name" => "social",
-                   "visit_duration" => 20,
-                   "visitors" => 3
+                   "dimensions" => ["social"],
+                   "metrics" => [3, 100, 20, 100.0]
                  }
                ]
       end
@@ -570,24 +594,24 @@ defmodule PlausibleWeb.Api.StatsController.ImportedTest do
           "imported_sources"
         )
 
-        conn =
-          get(
-            conn,
-            "/api/stats/#{site.domain}/utm_campaigns?period=day&date=2021-01-01&with_imported=true"
-          )
+        response =
+          do_query(conn, site, %{
+            "date_range" => ["2021-01-01", "2021-01-01"],
+            "dimensions" => ["visit:utm_campaign"],
+            "filters" => [["is_not", "visit:utm_campaign", [""]]],
+            "order_by" => [["visit:utm_campaign", "asc"]],
+            "metrics" => ["visitors", "bounce_rate", "visit_duration", "percentage"],
+            "include" => %{"imports" => true}
+          })
 
-        assert json_response(conn, 200)["results"] == [
+        assert response["results"] == [
                  %{
-                   "name" => "august",
-                   "visitors" => 2,
-                   "bounce_rate" => 50.0,
-                   "visit_duration" => 50.0
+                   "dimensions" => ["august"],
+                   "metrics" => [2, 50, 50, 50.0]
                  },
                  %{
-                   "name" => "profile",
-                   "visitors" => 2,
-                   "bounce_rate" => 100.0,
-                   "visit_duration" => 50.0
+                   "dimensions" => ["profile"],
+                   "metrics" => [2, 100, 50, 50.0]
                  }
                ]
       end
@@ -665,24 +689,23 @@ defmodule PlausibleWeb.Api.StatsController.ImportedTest do
           "imported_sources"
         )
 
-        conn =
-          get(
-            conn,
-            "/api/stats/#{site.domain}/utm_terms?period=day&date=2021-01-01&with_imported=true"
-          )
+        response =
+          do_query(conn, site, %{
+            "date_range" => ["2021-01-01", "2021-01-01"],
+            "dimensions" => ["visit:utm_term"],
+            "filters" => [["is_not", "visit:utm_term", [""]]],
+            "metrics" => ["visitors", "bounce_rate", "visit_duration", "percentage"],
+            "include" => %{"imports" => true}
+          })
 
-        assert json_response(conn, 200)["results"] == [
+        assert response["results"] == [
                  %{
-                   "name" => "Sweden",
-                   "visitors" => 3,
-                   "bounce_rate" => 67.0,
-                   "visit_duration" => 33.0
+                   "dimensions" => ["Sweden"],
+                   "metrics" => [3, 67, 33, 60.0]
                  },
                  %{
-                   "name" => "oat milk",
-                   "visitors" => 2,
-                   "bounce_rate" => 100.0,
-                   "visit_duration" => 50.0
+                   "dimensions" => ["oat milk"],
+                   "metrics" => [2, 100, 50, 40.0]
                  }
                ]
       end
@@ -759,24 +782,24 @@ defmodule PlausibleWeb.Api.StatsController.ImportedTest do
           "imported_sources"
         )
 
-        conn =
-          get(
-            conn,
-            "/api/stats/#{site.domain}/utm_contents?period=day&date=2021-01-01&with_imported=true"
-          )
+        response =
+          do_query(conn, site, %{
+            "date_range" => ["2021-01-01", "2021-01-01"],
+            "dimensions" => ["visit:utm_content"],
+            "filters" => [["is_not", "visit:utm_content", [""]]],
+            "order_by" => [["bounce_rate", "desc"]],
+            "metrics" => ["visitors", "bounce_rate", "visit_duration", "percentage"],
+            "include" => %{"imports" => true}
+          })
 
-        assert json_response(conn, 200)["results"] == [
+        assert response["results"] == [
                  %{
-                   "name" => "ad",
-                   "visitors" => 2,
-                   "bounce_rate" => 100.0,
-                   "visit_duration" => 50.0
+                   "dimensions" => ["ad"],
+                   "metrics" => [2, 100, 50, 50.0]
                  },
                  %{
-                   "name" => "blog",
-                   "visitors" => 2,
-                   "bounce_rate" => 50.0,
-                   "visit_duration" => 50.0
+                   "dimensions" => ["blog"],
+                   "metrics" => [2, 50, 50, 50.0]
                  }
                ]
       end
@@ -799,6 +822,13 @@ defmodule PlausibleWeb.Api.StatsController.ImportedTest do
             user_id: @user_id,
             timestamp: ~N[2021-01-01 00:15:00]
           )
+        ])
+
+        populate_stats(site, import_id, [
+          build(:imported_visitors, date: ~D[2021-01-01]),
+          build(:imported_visitors, date: ~D[2021-01-01]),
+          build(:imported_visitors, date: ~D[2021-01-01]),
+          build(:imported_visitors, date: ~D[2021-01-01])
         ])
 
         import_data(
@@ -869,28 +899,29 @@ defmodule PlausibleWeb.Api.StatsController.ImportedTest do
           "imported_entry_pages"
         )
 
-        conn =
-          get(
-            conn,
-            "/api/stats/#{site.domain}/pages?period=day&date=2021-01-01&detailed=true&with_imported=true"
-          )
+        response =
+          do_query(conn, site, %{
+            "date_range" => ["2021-01-01", "2021-01-01"],
+            "dimensions" => ["event:page"],
+            "metrics" => [
+              "visitors",
+              "pageviews",
+              "bounce_rate",
+              "time_on_page",
+              "scroll_depth",
+              "percentage"
+            ],
+            "include" => %{"imports" => true}
+          })
 
-        assert json_response(conn, 200)["results"] == [
+        assert response["results"] == [
                  %{
-                   "bounce_rate" => 0,
-                   "time_on_page" => 60,
-                   "visitors" => 3,
-                   "pageviews" => 4,
-                   "scroll_depth" => nil,
-                   "name" => "/some-other-page"
+                   "dimensions" => ["/some-other-page"],
+                   "metrics" => [3, 4, 0, 60, nil, 60.0]
                  },
                  %{
-                   "bounce_rate" => 25.0,
-                   "time_on_page" => 700,
-                   "visitors" => 2,
-                   "pageviews" => 2,
-                   "scroll_depth" => nil,
-                   "name" => "/"
+                   "dimensions" => ["/"],
+                   "metrics" => [2, 2, 25, 700, nil, 40.0]
                  }
                ]
       end
@@ -953,20 +984,19 @@ defmodule PlausibleWeb.Api.StatsController.ImportedTest do
           "imported_locations"
         )
 
-        conn =
-          get(
-            conn,
-            "/api/stats/#{site.domain}/cities?period=day&date=2021-01-01&with_imported=true"
-          )
+        response =
+          do_query(conn, site, %{
+            "date_range" => ["2021-01-01", "2021-01-01"],
+            "dimensions" => ["visit:city_name", "visit:city", "visit:country"],
+            "metrics" => ["visitors", "percentage"],
+            "filters" => [["is_not", "visit:city", [0]]],
+            "order_by" => [["visit:city_name", "desc"]],
+            "include" => %{"imports" => true}
+          })
 
-        assert json_response(conn, 200)["results"] == [
-                 %{"code" => 588_335, "name" => "Tartu", "visitors" => 1, "country_flag" => "🇪🇪"},
-                 %{
-                   "code" => 2_650_225,
-                   "name" => "Edinburgh",
-                   "visitors" => 1,
-                   "country_flag" => "🇬🇧"
-                 }
+        assert response["results"] == [
+                 %{"dimensions" => ["Tartu", 588_335, "EE"], "metrics" => [1, 50.0]},
+                 %{"dimensions" => ["Edinburgh", 2_650_225, "GB"], "metrics" => [1, 50.0]}
                ]
       end
 
@@ -1029,29 +1059,17 @@ defmodule PlausibleWeb.Api.StatsController.ImportedTest do
           "imported_locations"
         )
 
-        conn =
-          get(
-            conn,
-            "/api/stats/#{site.domain}/countries?period=day&date=2021-01-01&with_imported=true"
-          )
+        response =
+          do_query(conn, site, %{
+            "date_range" => ["2021-01-01", "2021-01-01"],
+            "dimensions" => ["visit:country_name", "visit:country"],
+            "metrics" => ["visitors", "percentage"],
+            "include" => %{"imports" => true}
+          })
 
-        assert json_response(conn, 200)["results"] == [
-                 %{
-                   "code" => "EE",
-                   "alpha_3" => "EST",
-                   "name" => "Estonia",
-                   "flag" => "🇪🇪",
-                   "visitors" => 3,
-                   "percentage" => 60
-                 },
-                 %{
-                   "code" => "GB",
-                   "alpha_3" => "GBR",
-                   "name" => "United Kingdom",
-                   "flag" => "🇬🇧",
-                   "visitors" => 2,
-                   "percentage" => 40
-                 }
+        assert response["results"] == [
+                 %{"dimensions" => ["Estonia", "EE"], "metrics" => [3, 60.0]},
+                 %{"dimensions" => ["United Kingdom", "GB"], "metrics" => [2, 40.0]}
                ]
       end
 
@@ -1095,16 +1113,19 @@ defmodule PlausibleWeb.Api.StatsController.ImportedTest do
           "imported_devices"
         )
 
-        conn =
-          get(
-            conn,
-            "/api/stats/#{site.domain}/screen-sizes?period=day&date=2021-01-01&with_imported=true"
-          )
+        response =
+          do_query(conn, site, %{
+            "date_range" => ["2021-01-01", "2021-01-01"],
+            "dimensions" => ["visit:device"],
+            "order_by" => [["visitors", "desc"], ["visit:device", "asc"]],
+            "metrics" => ["visitors", "percentage"],
+            "include" => %{"imports" => true}
+          })
 
-        assert json_response(conn, 200)["results"] == [
-                 %{"name" => "Desktop", "visitors" => 2, "percentage" => 40},
-                 %{"name" => "Laptop", "visitors" => 2, "percentage" => 40},
-                 %{"name" => "Mobile", "visitors" => 1, "percentage" => 20}
+        assert response["results"] == [
+                 %{"dimensions" => ["Desktop"], "metrics" => [2, 40.0]},
+                 %{"dimensions" => ["Laptop"], "metrics" => [2, 40.0]},
+                 %{"dimensions" => ["Mobile"], "metrics" => [1, 20.0]}
                ]
       end
 
@@ -1150,17 +1171,20 @@ defmodule PlausibleWeb.Api.StatsController.ImportedTest do
           "imported_browsers"
         )
 
-        conn =
-          get(
-            conn,
-            "/api/stats/#{site.domain}/browsers?period=day&date=2021-01-01&with_imported=true"
-          )
+        response =
+          do_query(conn, site, %{
+            "date_range" => ["2021-01-01", "2021-01-01"],
+            "dimensions" => ["visit:browser"],
+            "order_by" => [["visitors", "desc"], ["visit:browser", "asc"]],
+            "metrics" => ["visitors", "percentage"],
+            "include" => %{"imports" => true}
+          })
 
-        assert stats = json_response(conn, 200)["results"]
-        assert length(stats) == 3
-        assert %{"name" => "Firefox", "visitors" => 2, "percentage" => 50.0} in stats
-        assert %{"name" => "Mobile App", "visitors" => 1, "percentage" => 25.0} in stats
-        assert %{"name" => "Chrome", "visitors" => 1, "percentage" => 25.0} in stats
+        assert response["results"] == [
+                 %{"dimensions" => ["Firefox"], "metrics" => [2, 50.0]},
+                 %{"dimensions" => ["Chrome"], "metrics" => [1, 25.0]},
+                 %{"dimensions" => ["Mobile App"], "metrics" => [1, 25.0]}
+               ]
       end
 
       test "OS data imported from Google Analytics", %{
@@ -1214,15 +1238,17 @@ defmodule PlausibleWeb.Api.StatsController.ImportedTest do
           "imported_operating_systems"
         )
 
-        conn =
-          get(
-            conn,
-            "/api/stats/#{site.domain}/operating-systems?period=day&date=2021-01-01&with_imported=true"
-          )
+        response =
+          do_query(conn, site, %{
+            "date_range" => ["2021-01-01", "2021-01-01"],
+            "dimensions" => ["visit:os"],
+            "metrics" => ["visitors", "percentage"],
+            "include" => %{"imports" => true}
+          })
 
-        assert json_response(conn, 200)["results"] == [
-                 %{"name" => "Mac", "visitors" => 3, "percentage" => 60},
-                 %{"name" => "GNU/Linux", "visitors" => 2, "percentage" => 40}
+        assert response["results"] == [
+                 %{"dimensions" => ["Mac"], "metrics" => [3, 60.0]},
+                 %{"dimensions" => ["GNU/Linux"], "metrics" => [2, 40.0]}
                ]
       end
 
@@ -1264,17 +1290,18 @@ defmodule PlausibleWeb.Api.StatsController.ImportedTest do
           "imported_visitors"
         )
 
-        conn =
-          get(
-            conn,
-            "/api/stats/#{site.domain}/top-stats?period=month&date=2021-01-01&with_imported=true"
-          )
+        params = %{
+          "metrics" => ["visit_duration"],
+          "date_range" => ["2021-01-01", "2021-01-31"],
+          "include" => %{"imports" => true},
+          "filters" => []
+        }
 
-        assert %{"top_stats" => top_stats} = json_response(conn, 200)
+        response = do_query(conn, site, params)
 
-        visit_duration = Enum.find(top_stats, fn stat -> stat["name"] == "Visit duration" end)
-
-        assert visit_duration["value"] == 3_479_032
+        assert response["results"] == [
+                 %{"dimensions" => [], "metrics" => [3_479_032]}
+               ]
       end
 
       test "skips empty dates from import", %{conn: conn, site: site, import_id: import_id} do
@@ -1306,22 +1333,25 @@ defmodule PlausibleWeb.Api.StatsController.ImportedTest do
           "imported_visitors"
         )
 
-        conn =
-          get(
-            conn,
-            "/api/stats/#{site.domain}/top-stats?period=month&date=2021-01-01&with_imported=true"
-          )
+        params = %{
+          "metrics" => [
+            "visitors",
+            "visits",
+            "pageviews",
+            "views_per_visit",
+            "bounce_rate",
+            "visit_duration"
+          ],
+          "date_range" => ["2021-01-01", "2021-01-31"],
+          "include" => %{"imports" => true},
+          "filters" => []
+        }
 
-        assert %{
-                 "top_stats" => [
-                   %{"name" => "Unique visitors", "value" => 1},
-                   %{"name" => "Total visits", "value" => 1},
-                   %{"name" => "Total pageviews", "value" => 1},
-                   %{"name" => "Views per visit", "value" => 1.0},
-                   %{"name" => "Bounce rate", "value" => 0},
-                   %{"name" => "Visit duration", "value" => 60}
-                 ]
-               } = json_response(conn, 200)
+        response = do_query(conn, site, params)
+
+        assert response["results"] == [
+                 %{"dimensions" => [], "metrics" => [1, 1, 1, 1, 0, 60]}
+               ]
       end
     end
   end

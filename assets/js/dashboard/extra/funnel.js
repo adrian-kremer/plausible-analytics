@@ -10,7 +10,7 @@ import RocketIcon from '../stats/modals/rocket-icon'
 
 import * as api from '../api'
 import LazyLoader from '../components/lazy-loader'
-import { useQueryContext } from '../query-context'
+import { useDashboardStateContext } from '../dashboard-state-context'
 import { useSiteContext } from '../site-context'
 import { UIMode, useTheme } from '../theme-context'
 
@@ -44,7 +44,7 @@ const getPalette = (theme) => {
 
 export default function Funnel({ funnelName, tabs }) {
   const site = useSiteContext()
-  const { query } = useQueryContext()
+  const { dashboardState } = useDashboardStateContext()
   const [loading, setLoading] = useState(true)
   const [visible, setVisible] = useState(false)
   const [error, setError] = useState(undefined)
@@ -76,7 +76,7 @@ export default function Funnel({ funnelName, tabs }) {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, funnelName, visible, isSmallScreen])
+  }, [dashboardState, funnelName, visible, isSmallScreen])
 
   useEffect(() => {
     if (canvasRef.current && funnel && visible && !isSmallScreen) {
@@ -153,7 +153,7 @@ export default function Funnel({ funnelName, tabs }) {
     } else {
       return api.get(
         `/api/stats/${encodeURIComponent(site.domain)}/funnels/${funnelMeta.id}`,
-        query
+        dashboardState
       )
     }
   }
@@ -294,7 +294,9 @@ export default function Funnel({ funnelName, tabs }) {
   const header = () => {
     return (
       <div className="flex justify-between w-full">
-        <h4 className="mt-2 text-sm dark:text-gray-100">{funnelName}</h4>
+        <h4 className="mt-2 text-base font-semibold dark:text-gray-100">
+          {funnelName}
+        </h4>
         {tabs}
       </div>
     )
@@ -346,7 +348,7 @@ export default function Funnel({ funnelName, tabs }) {
       return (
         <div className="mb-8">
           {header()}
-          <p className="mt-1 text-gray-500 text-sm">
+          <p className="mt-0.5 text-gray-500 text-sm">
             {funnel.steps.length}-step funnel • {conversionRate}% conversion
             rate
           </p>

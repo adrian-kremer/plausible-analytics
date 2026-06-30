@@ -32,9 +32,9 @@ defmodule Plausible.Stats.Breakdown do
         filters: query.filters ++ dimension_filters(dimension),
         pagination: %{limit: limit, offset: (page - 1) * limit},
         # Allow pageview and event metrics to be queried off of sessions table
-        legacy_breakdown: true,
-        remove_unavailable_revenue_metrics: true
+        legacy_breakdown: true
       )
+      |> Query.set_include(:drop_unavailable_revenue_metrics, true)
 
     %QueryResult{results: results, meta: meta} = QueryRunner.run(site, query_with_metrics)
 
@@ -49,7 +49,7 @@ defmodule Plausible.Stats.Breakdown do
       date_range_label: format_date_range(query)
     }
 
-    if query.include.comparisons do
+    if query.include.compare do
       comparison_date_range_label =
         query
         |> Comparisons.get_comparison_query()

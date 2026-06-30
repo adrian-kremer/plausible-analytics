@@ -1,16 +1,8 @@
-defimpl Bamboo.Formatter, for: Plausible.Auth.User do
-  def format_email_address(user, _opts) do
-    {user.name, user.email}
-  end
-end
-
-defimpl FunWithFlags.Actor, for: Plausible.Auth.User do
-  def id(%{id: id}) do
-    "user:#{id}"
-  end
-end
-
 defmodule Plausible.Auth.User do
+  @moduledoc """
+  User schema.
+  """
+
   use Plausible
   use Ecto.Schema
   import Ecto.Changeset
@@ -52,6 +44,7 @@ defmodule Plausible.Auth.User do
     # Fields for TOTP authentication. See `Plausible.Auth.TOTP`.
     field :totp_enabled, :boolean, default: false
     field :totp_secret, Plausible.Auth.TOTP.EncryptedBinary
+    field :totp_secret_fallback, Plausible.Auth.TOTP.FallbackEncryptedBinary
     field :totp_token, :string
     field :totp_last_used_at, :naive_datetime
 
@@ -282,5 +275,17 @@ defmodule Plausible.Auth.User do
       must_verify? = Keyword.fetch!(selfhosted_config, :enable_email_verification)
       change(user, email_verified: not must_verify?)
     end
+  end
+end
+
+defimpl Bamboo.Formatter, for: Plausible.Auth.User do
+  def format_email_address(user, _opts) do
+    {user.name, user.email}
+  end
+end
+
+defimpl FunWithFlags.Actor, for: Plausible.Auth.User do
+  def id(%{id: id}) do
+    "user:#{id}"
   end
 end

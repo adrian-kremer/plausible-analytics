@@ -80,7 +80,7 @@ defmodule Plausible.Billing.PlanBenefitsTest do
                "Stats API (600 requests per hour)",
                "Looker Studio Connector",
                "Ecommerce revenue attribution",
-               "Funnels",
+               "Funnels and user journeys",
                "Consolidated View"
              ]
     end
@@ -97,7 +97,7 @@ defmodule Plausible.Billing.PlanBenefitsTest do
                "5 years of data retention",
                "Custom Properties",
                "Ecommerce revenue attribution",
-               "Funnels",
+               "Funnels and user journeys",
                "Stats API (600 requests per hour)",
                "Looker Studio Connector",
                "Shared Segments",
@@ -121,7 +121,7 @@ defmodule Plausible.Billing.PlanBenefitsTest do
                ) == [
                  "Everything in Growth",
                  "Ecommerce revenue attribution",
-                 "Funnels",
+                 "Funnels and user journeys",
                  "Shared Segments",
                  "Consolidated View"
                ]
@@ -145,6 +145,7 @@ defmodule Plausible.Billing.PlanBenefitsTest do
                "Sites API",
                "Single Sign-On (SSO)",
                "Managed Proxy",
+               "Scheduled raw event data exports",
                "5+ years of data retention",
                "Priority support"
              ]
@@ -165,6 +166,7 @@ defmodule Plausible.Billing.PlanBenefitsTest do
                "Sites API",
                "Single Sign-On (SSO)",
                "Managed Proxy",
+               "Scheduled raw event data exports",
                "5+ years of data retention",
                "Priority support"
              ]
@@ -184,6 +186,7 @@ defmodule Plausible.Billing.PlanBenefitsTest do
                "Sites API",
                "Single Sign-On (SSO)",
                "Managed Proxy",
+               "Scheduled raw event data exports",
                "Priority support"
              ]
     end

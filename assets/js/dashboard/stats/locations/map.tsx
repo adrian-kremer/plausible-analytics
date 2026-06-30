@@ -1,22 +1,32 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as d3 from 'd3'
 import classNames from 'classnames'
-import * as api from '../../api'
-import { replaceFilterByPrefix, cleanLabels } from '../../util/filters'
+import {
+  replaceFilterByPrefix,
+  cleanLabels,
+  hasConversionGoalFilter,
+  isRealTimeDashboard
+} from '../../util/filters'
 import { useAppNavigate } from '../../navigation/use-app-navigate'
 import { numberShortFormatter } from '../../util/number-formatter'
-import * as topojson from 'topojson-client'
-import { useQuery } from '@tanstack/react-query'
 import { useSiteContext } from '../../site-context'
-import { useQueryContext } from '../../query-context'
-import worldJson from 'visionscarto-world-atlas/world/110m.json'
+import { useDashboardStateContext } from '../../dashboard-state-context'
 import { UIMode, useTheme } from '../../theme-context'
-import { apiPath } from '../../util/url'
-import MoreLink from '../more-link'
-import { countriesRoute } from '../../router'
-import { MIN_HEIGHT } from '../reports/list'
+import { MIN_HEIGHT } from '../reports/index-breakdown'
 import { MapTooltip } from './map-tooltip'
 import { GeolocationNotice } from './geolocation-notice'
+import { DashboardState } from '../../dashboard-state'
+import { useQueryApi } from '../../hooks/use-query-api'
+import { QueryApiResponse } from '../../api'
+import {
+  COUNTRIES_BY_TWO_LETTER_CODE,
+  parseWorldTopoJsonToGeoJsonFeatures,
+  WorldJsonCountryData
+} from './countries'
+import {
+  BREAKDOWN_REPORTS,
+  BreakdownReportKey
+} from '../reports/reports-config'
 
 const width = 475
 const height = 335
@@ -27,19 +37,28 @@ type CountryData = {
   visitors: number
   code: string
 }
-type WorldJsonCountryData = { properties: { name: string; a3: string } }
+
+function getMetricLabel(dashboardState: DashboardState) {
+  if (hasConversionGoalFilter(dashboardState)) {
+    return { singular: 'Conversion', plural: 'Conversions' }
+  }
+  if (isRealTimeDashboard(dashboardState)) {
+    return { singular: 'Current visitor', plural: 'Current visitors' }
+  }
+  return { singular: 'Visitor', plural: 'Visitors' }
+}
 
 const WorldMap = ({
   onCountrySelect,
-  afterFetchData
+  onDataReady
 }: {
   onCountrySelect: () => void
-  afterFetchData: (response: unknown) => void
+  onDataReady: (response: QueryApiResponse) => void
 }) => {
   const navigate = useAppNavigate()
   const { mode } = useTheme()
   const site = useSiteContext()
-  const { query } = useQueryContext()
+  const { dashboardState } = useDashboardStateContext()
   const svgRef = useRef<SVGSVGElement | null>(null)
   const [tooltip, setTooltip] = useState<{
     x: number
@@ -47,85 +66,103 @@ const WorldMap = ({
     hoveredCountryAlpha3Code: string | null
   }>({ x: 0, y: 0, hoveredCountryAlpha3Code: null })
 
-  const labels =
-    query.period === 'realtime'
-      ? { singular: 'Current visitor', plural: 'Current visitors' }
-      : { singular: 'Visitor', plural: 'Visitors' }
+  const metricLabel = useMemo(
+    () => getMetricLabel(dashboardState),
+    [dashboardState]
+  )
 
-  const { data, refetch, isFetching, isError } = useQuery({
-    queryKey: ['countries', 'map', query],
-    placeholderData: (previousData) => previousData,
-    queryFn: async (): Promise<{
-      results: CountryData[]
-    }> => {
-      return await api.get(apiPath(site, '/countries'), query, {
-        limit: 300
-      })
-    }
-  })
-
-  useEffect(() => {
-    const onTickRefetchData = () => {
-      if (query.period === 'realtime') {
-        refetch()
+  const { apiState } = useQueryApi(site, [
+    'visit:country',
+    {
+      dashboardState,
+      reportParams: {
+        metrics: ['visitors'],
+        dimensions: BREAKDOWN_REPORTS[BreakdownReportKey.countries].dimensions,
+        alwaysOnFilters:
+          BREAKDOWN_REPORTS[BreakdownReportKey.countries].alwaysOnFilters,
+        order_by: [['visitors', 'desc']],
+        pagination: { limit: 300, offset: 0 }
       }
     }
-    document.addEventListener('tick', onTickRefetchData)
-    return () => document.removeEventListener('tick', onTickRefetchData)
-  }, [query.period, refetch])
+  ])
+  const { data, isFetching, isError } = apiState
 
   useEffect(() => {
     if (data) {
-      afterFetchData(data)
+      onDataReady(data)
     }
-  }, [afterFetchData, data])
+  }, [onDataReady, data])
 
-  const { maxValue, dataByCountryCode } = useMemo(() => {
-    const dataByCountryCode: Map<string, CountryData> = new Map()
+  const { maxValue, dataByAlpha3Code } = useMemo(() => {
+    const dataByAlpha3Code: Map<string, CountryData> = new Map()
     let maxValue = 0
-    for (const { alpha_3, visitors, name, code } of data?.results || []) {
+    for (const row of data?.results ?? []) {
+      const [countryName, countryCode] = row.dimensions
+      const [visitors] = row.metrics as [number]
+      const entry = COUNTRIES_BY_TWO_LETTER_CODE[countryCode]
+      if (!entry || !entry.alpha_3) continue
       if (visitors > maxValue) {
         maxValue = visitors
       }
-      dataByCountryCode.set(alpha_3, { alpha_3, visitors, name, code })
+      dataByAlpha3Code.set(entry.alpha_3, {
+        alpha_3: entry.alpha_3,
+        visitors,
+        name: countryName,
+        code: countryCode
+      })
     }
-    return { maxValue, dataByCountryCode }
+    return { maxValue, dataByAlpha3Code }
   }, [data])
 
   const onCountryClick = useCallback(
     (d: WorldJsonCountryData) => {
-      const country = dataByCountryCode.get(d.properties.a3)
+      const country = dataByAlpha3Code.get(d.properties.a3)
       const clickable = country && country.visitors
       if (clickable) {
-        const filters = replaceFilterByPrefix(query, 'country', [
+        const filters = replaceFilterByPrefix(dashboardState, 'country', [
           'is',
           'country',
           [country.code]
         ])
-        const labels = cleanLabels(filters, query.labels, 'country', {
+        const labels = cleanLabels(filters, dashboardState.labels, 'country', {
           [country.code]: country.name
         })
-        navigate({ search: (search) => ({ ...search, filters, labels }) })
+        onCountrySelect()
+        navigate({
+          search: (searchRecord) => ({ ...searchRecord, filters, labels })
+        })
       }
     },
-    [navigate, query, dataByCountryCode]
+    [navigate, dashboardState, dataByAlpha3Code, onCountrySelect]
   )
-
-  const onCountryClickRef = useRef(onCountryClick)
-  useEffect(() => {
-    onCountryClickRef.current = onCountryClick
-  }, [onCountryClick])
 
   useEffect(() => {
     if (!svgRef.current) {
       return
     }
 
-    const svg = drawInteractiveCountries(
-      svgRef.current,
-      setTooltip,
-      onCountryClickRef
-    )
+    const { svg, countriesSelection } = drawInteractiveCountries(svgRef.current)
+    const highlightSelection = drawHighlightedCountryOutline(svgRef.current)
+
+    countriesSelection
+      .on('mouseover', function (event, country) {
+        const [x, y] = d3.pointer(event, svg.node()?.parentNode)
+        setTooltip({ x, y, hoveredCountryAlpha3Code: country.properties.a3 })
+
+        highlightSelection
+          .attr('d', this.getAttribute('d'))
+          .attr('class', hoveredOutlineClass)
+      })
+
+      .on('mousemove', function (event) {
+        const [x, y] = d3.pointer(event, svg.node()?.parentNode)
+        setTooltip((currentState) => ({ ...currentState, x, y }))
+      })
+
+      .on('mouseout', function () {
+        setTooltip({ x: 0, y: 0, hoveredCountryAlpha3Code: null })
+        highlightSelection.attr('d', null).attr('class', initialOutlineClass)
+      })
 
     return () => {
       svg.selectAll('*').remove()
@@ -144,20 +181,24 @@ const WorldMap = ({
       colorInCountriesWithValues(
         svgRef.current,
         getColorForValue,
-        dataByCountryCode
-      )
+        dataByAlpha3Code
+      ).on('click', (_event, countryPath) => {
+        onCountryClick(countryPath as unknown as WorldJsonCountryData)
+      })
     }
-  }, [mode, maxValue, dataByCountryCode, onCountryClick])
+  }, [mode, maxValue, dataByAlpha3Code, onCountryClick])
 
   const hoveredCountryData = tooltip.hoveredCountryAlpha3Code
-    ? dataByCountryCode.get(tooltip.hoveredCountryAlpha3Code)
+    ? dataByAlpha3Code.get(tooltip.hoveredCountryAlpha3Code)
     : undefined
 
   return (
-    <div className="flex flex-col relative" style={{ minHeight: MIN_HEIGHT }}>
-      <div className="mt-4" />
+    <div
+      className="flex flex-col justify-center items-center relative"
+      style={{ minHeight: MIN_HEIGHT }}
+    >
       <div
-        className="relative mx-auto w-full"
+        className="relative flex justify-center items-center mt-4 w-full"
         style={{ height: height, maxWidth: width }}
       >
         <svg
@@ -172,7 +213,9 @@ const WorldMap = ({
             name={hoveredCountryData.name}
             value={numberShortFormatter(hoveredCountryData.visitors)}
             label={
-              labels[hoveredCountryData.visitors === 1 ? 'singular' : 'plural']
+              hoveredCountryData.visitors === 1
+                ? metricLabel.singular
+                : metricLabel.plural
             }
           />
         )}
@@ -185,41 +228,50 @@ const WorldMap = ({
             </div>
           ))}
       </div>
-      <MoreLink
-        list={data?.results ?? []}
-        linkProps={{
-          path: countriesRoute.path,
-          search: (search: Record<string, unknown>) => search
-        }}
-        className={undefined}
-        onClick={undefined}
-      />
       {site.isDbip && <GeolocationNotice />}
     </div>
   )
 }
 
 const colorScales = {
-  [UIMode.dark]: ['#2e3954', '#6366f1'],
-  [UIMode.light]: ['#f5f3ff', '#a78bfa']
+  [UIMode.dark]: ['#2a276d', '#6366f1'], // custom color between indigo-900 and indigo-950, indigo-500
+  [UIMode.light]: ['#e0e7ff', '#818cf8'] // indigo-100, indigo-400
 }
 
-const sharedCountryClass = classNames('transition-colors')
+const countryElementClass = 'country'
+const countrySelector = `path.${countryElementClass}`
+const initialStroke = classNames(
+  'stroke-white',
+  'dark:stroke-gray-900',
+  'stroke-1px'
+)
+const hoveredStroke = classNames(
+  'stroke-[1.5px]',
+  'stroke-indigo-400',
+  'dark:stroke-indigo-500'
+)
 
 const countryClass = classNames(
-  sharedCountryClass,
+  countryElementClass,
+  initialStroke,
+  'transition-colors',
   'stroke-1',
-  'fill-[#fafafa]',
-  'stroke-[#dae1e7]',
-  'dark:fill-[#323236]',
-  'dark:stroke-[#18181b]'
+  'fill-gray-150',
+  'dark:fill-gray-750'
 )
 
-const highlightedCountryClass = classNames(
-  'stroke-2',
-  'stroke-[#a78bfa]',
-  'dark:stroke-[#a78bfa]'
+const sharedOutlineClass = classNames(
+  'transition-colors',
+  'fill-none',
+  'pointer-events-none'
 )
+
+const initialOutlineClass = classNames(
+  sharedOutlineClass,
+  initialStroke,
+  'opacity-0'
+)
+const hoveredOutlineClass = classNames(sharedOutlineClass, hoveredStroke)
 
 /**
  * Used to color the countries
@@ -230,25 +282,19 @@ function colorInCountriesWithValues(
   getColorForValue: d3.ScaleLinear<string, string, never>,
   dataByCountryCode: Map<string, CountryData>
 ) {
-  function getCountryByCountryPath(countryPath: unknown) {
-    return dataByCountryCode.get(
-      (countryPath as unknown as WorldJsonCountryData).properties.a3
-    )
-  }
-
   const svg = d3.select(element)
 
   return svg
-    .selectAll('path')
+    .selectAll<SVGPathElement, WorldJsonCountryData>(countrySelector)
     .style('fill', (countryPath) => {
-      const country = getCountryByCountryPath(countryPath)
+      const country = dataByCountryCode.get(countryPath.properties.a3)
       if (!country?.visitors) {
         return null
       }
       return getColorForValue(country.visitors)
     })
     .style('cursor', (countryPath) => {
-      const country = getCountryByCountryPath(countryPath)
+      const country = dataByCountryCode.get(countryPath.properties.a3)
       if (!country?.visitors) {
         return null
       }
@@ -256,51 +302,24 @@ function colorInCountriesWithValues(
     })
 }
 
-/** @returns the d3 selected svg element */
-function drawInteractiveCountries(
-  element: SVGSVGElement,
-  setTooltip: React.Dispatch<
-    React.SetStateAction<{
-      x: number
-      y: number
-      hoveredCountryAlpha3Code: string | null
-    }>
-  >,
-  onCountryClickRef: React.MutableRefObject<(d: WorldJsonCountryData) => void>
-) {
+function drawHighlightedCountryOutline(element: SVGSVGElement) {
+  return d3.select(element).append('path').attr('class', initialOutlineClass)
+}
+
+function drawInteractiveCountries(element: SVGSVGElement) {
   const path = setupProjetionPath()
   const data = parseWorldTopoJsonToGeoJsonFeatures()
   const svg = d3.select(element)
 
-  svg
-    .selectAll('path')
+  const countriesSelection = svg
+    .selectAll(countrySelector)
     .data(data)
     .enter()
     .append('path')
     .attr('class', countryClass)
     .attr('d', path as never)
 
-    .on('click', (_event, d) => {
-      onCountryClickRef.current(d)
-    })
-
-    .on('mouseover', function (event, country) {
-      const [x, y] = d3.pointer(event, svg.node()?.parentNode)
-      setTooltip({ x, y, hoveredCountryAlpha3Code: country.properties.a3 })
-      d3.select(this).classed(highlightedCountryClass, true)
-    })
-
-    .on('mousemove', function (event) {
-      const [x, y] = d3.pointer(event, svg.node()?.parentNode)
-      setTooltip((currentState) => ({ ...currentState, x, y }))
-    })
-
-    .on('mouseout', function () {
-      setTooltip({ x: 0, y: 0, hoveredCountryAlpha3Code: null })
-      d3.select(this).classed(highlightedCountryClass, false)
-    })
-
-  return svg
+  return { svg, countriesSelection }
 }
 
 function setupProjetionPath() {
@@ -311,16 +330,6 @@ function setupProjetionPath() {
 
   const path = d3.geoPath().projection(projection)
   return path
-}
-
-function parseWorldTopoJsonToGeoJsonFeatures(): Array<WorldJsonCountryData> {
-  const collection = topojson.feature(
-    // @ts-expect-error strings in worldJson not recongizable as the enum values declared in library
-    worldJson,
-    worldJson.objects.countries
-  )
-  // @ts-expect-error topojson.feature return type incorrectly inferred as not a collection
-  return collection.features
 }
 
 export default WorldMap

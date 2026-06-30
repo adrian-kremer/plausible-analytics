@@ -14,6 +14,10 @@ if config_env() == :ce_test do
   Envy.load(["config/.env.test"])
 end
 
+if config_env() == :e2e_test do
+  Envy.load(["config/.env.e2e_test"])
+end
+
 config_dir = System.get_env("CONFIG_DIR", "/run/secrets")
 
 log_format =
@@ -27,7 +31,7 @@ log_level =
   |> String.to_existing_atom()
 
 config :logger, level: log_level
-config :logger, :default_formatter, metadata: [:request_id]
+config :logger, :default_formatter, metadata: [:request_id, :trace_id]
 
 config :logger, Sentry.LoggerBackend,
   capture_log_messages: true,
@@ -186,7 +190,31 @@ totp_vault_key =
     Plug.Crypto.KeyGenerator.generate(secret_key_base, "totp", length: 32, iterations: 100_000)
   end
 
-config :plausible, Plausible.Auth.TOTP, vault_key: totp_vault_key
+fallback_totp_vault_key =
+  if totp_vault_key_base64 = get_var_from_path_or_env(config_dir, "TOTP_VAULT_KEY_FALLBACK") do
+    case Base.decode64(totp_vault_key_base64) do
+      {:ok, totp_vault_key} ->
+        if byte_size(totp_vault_key) == 32 do
+          totp_vault_key
+        else
+          raise ArgumentError, """
+          TOTP_VAULT_KEY_FALLBACK must be Base64 encoded 32 bytes, e.g. `openssl rand -base64 32`.
+          Got Base64 encoded #{byte_size(totp_vault_key)} bytes.
+          More info: https://github.com/plausible/community-edition/wiki/configuration#totp_vault_key
+          """
+        end
+
+      :error ->
+        raise ArgumentError, """
+        TOTP_VAULT_KEY_FALLBACK must be Base64 encoded 32 bytes, e.g. `openssl rand -base64 32`
+        More info: https://github.com/plausible/community-edition/wiki/configuration#totp_vault_key
+        """
+    end
+  end
+
+config :plausible, Plausible.Auth.TOTP,
+  vault_key: totp_vault_key,
+  fallback_vault_key: fallback_totp_vault_key || totp_vault_key
 
 build_metadata_raw = get_var_from_path_or_env(config_dir, "BUILD_METADATA", "{}")
 
@@ -234,10 +262,8 @@ help_scout_app_secret = get_var_from_path_or_env(config_dir, "HELP_SCOUT_APP_SEC
 help_scout_signature_key = get_var_from_path_or_env(config_dir, "HELP_SCOUT_SIGNATURE_KEY")
 help_scout_vault_key = get_var_from_path_or_env(config_dir, "HELP_SCOUT_VAULT_KEY")
 
-{otel_sampler_ratio, ""} =
-  config_dir
-  |> get_var_from_path_or_env("OTEL_SAMPLER_RATIO", "0.5")
-  |> Float.parse()
+otlp_endpoint =
+  get_var_from_path_or_env(config_dir, "OTLP_ENDPOINT", "https://api.honeycomb.io:443")
 
 geolite2_country_db =
   get_var_from_path_or_env(
@@ -624,11 +650,19 @@ ch_transport_opts =
 config :plausible, Plausible.ClickhouseRepo,
   queue_target: 500,
   queue_interval: 2000,
+  timeout: 15_000,
   url: ch_db_url,
   transport_opts: ch_transport_opts,
   settings: [
     readonly: 1,
-    join_algorithm: "direct,parallel_hash,hash"
+    join_algorithm: "direct,parallel_hash,hash",
+    # stops queries when :timeout ClickhouseRepo connection :timeout value reached
+    cancel_http_readonly_queries_on_client_close: 1,
+    # stops queries when they will likely take over 20s
+    # NB! when :timeout is overridden to be over 20s,
+    # for it to have meaningful effect,
+    # this must be overridden as well
+    max_execution_time: 20
   ]
 
 config :plausible, Plausible.IngestRepo,
@@ -934,13 +968,12 @@ end
 if honeycomb_api_key && honeycomb_dataset do
   config :opentelemetry,
     resource: Plausible.OpenTelemetry.resource_attributes(runtime_metadata),
-    sampler: {Plausible.OpenTelemetry.Sampler, %{ratio: otel_sampler_ratio}},
     span_processor: :batch,
     traces_exporter: :otlp
 
   config :opentelemetry_exporter,
     otlp_protocol: :grpc,
-    otlp_endpoint: "https://api.honeycomb.io:443",
+    otlp_endpoint: otlp_endpoint,
     otlp_headers: [
       {"x-honeycomb-team", honeycomb_api_key},
       {"x-honeycomb-dataset", honeycomb_dataset}
@@ -949,6 +982,30 @@ else
   config :opentelemetry,
     sampler: :always_off,
     traces_exporter: :none
+end
+
+beam_metrics_enabled? = get_bool_from_path_or_env(config_dir, "BEAM_METRICS_ENABLED", false)
+
+if beam_metrics_enabled? do
+  beam_metrics_interval = get_int_from_path_or_env(config_dir, "BEAM_METRICS_INTERVAL_MS", 5_000)
+
+  beam_metrics_otlp_endpoint =
+    get_var_from_path_or_env(config_dir, "OTEL_EXPORTER_OTLP_ENDPOINT") || otlp_endpoint
+
+  config :opentelemetry_experimental,
+    readers: [
+      %{
+        module: :otel_metric_reader,
+        config: %{
+          export_interval_ms: beam_metrics_interval,
+          exporter:
+            {:otel_exporter_metrics_otlp,
+             %{
+               endpoints: [beam_metrics_otlp_endpoint]
+             }}
+        }
+      }
+    ]
 end
 
 config :tzdata, :data_dir, Path.join(persistent_cache_dir || System.tmp_dir!(), "tzdata_data")
@@ -1048,5 +1105,3 @@ unless s3_disabled? do
 end
 
 config :plausible, Plausible.Cache.Adapter, sessions: [partitions: 100]
-
-config :phoenix_storybook, enabled: env !== "prod"

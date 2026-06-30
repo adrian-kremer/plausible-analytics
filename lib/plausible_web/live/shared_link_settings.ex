@@ -31,6 +31,7 @@ defmodule PlausibleWeb.Live.SharedLinkSettings do
     {:ok,
      assign(socket,
        site_id: site_id,
+       site_team: socket.assigns.site.team,
        domain: domain,
        form_shared_link: nil
      )}
@@ -46,7 +47,7 @@ defmodule PlausibleWeb.Live.SharedLinkSettings do
         feature_mod={Plausible.Billing.Feature.SharedLinks}
         site={@site}
         current_user={@current_user}
-        current_team={@current_team}
+        current_team={@site_team}
       >
         <:title>
           Shared links
@@ -119,9 +120,35 @@ defmodule PlausibleWeb.Live.SharedLinkSettings do
               </:thead>
               <:tbody :let={link}>
                 <.td truncate hide_on_mobile>
-                  {link.name}
-                  <Heroicons.lock_closed :if={link.password_hash} class="feather ml-2 mb-0.5" />
-                  <Heroicons.lock_open :if={!link.password_hash} class="feather ml-2 mb-0.5" />
+                  <div class="flex items-center">
+                    {link.name}
+                    <.tooltip
+                      :if={Plausible.Site.SharedLink.password_protected?(link)}
+                      enabled?={true}
+                      centered?={true}
+                    >
+                      <:tooltip_content>
+                        Password protected
+                      </:tooltip_content>
+                      <Heroicons.lock_closed class="size-3.5 mt-px ml-2 mb-0.5 stroke-2" />
+                    </.tooltip>
+                    <.tooltip
+                      :if={!Plausible.Site.SharedLink.password_protected?(link)}
+                      enabled?={true}
+                      centered?={true}
+                    >
+                      <:tooltip_content>
+                        No password protection
+                      </:tooltip_content>
+                      <Heroicons.lock_open class="size-3.5 mt-px ml-2 mb-0.5 stroke-2" />
+                    </.tooltip>
+                    <.tooltip :if={link.segment_id} enabled?={true} centered?={true}>
+                      <:tooltip_content>
+                        Limited to segment of data
+                      </:tooltip_content>
+                      <Heroicons.eye_slash class="size-3.5 mt-px ml-1 stroke-2" />
+                    </.tooltip>
+                  </div>
                 </.td>
                 <.td>
                   <.input_with_clipboard
@@ -158,10 +185,19 @@ defmodule PlausibleWeb.Live.SharedLinkSettings do
   end
 
   def handle_event("edit-shared-link", %{"slug" => slug}, socket) do
-    shared_link = Plausible.Repo.get_by(Plausible.Site.SharedLink, slug: slug)
+    site_id = socket.assigns.site.id
+
+    shared_link =
+      Plausible.Site.SharedLink
+      |> Plausible.Repo.get_by(slug: slug, site_id: site_id)
+      |> Plausible.Repo.preload(:segment)
 
     socket =
-      socket |> assign(form_shared_link: shared_link) |> Modal.open("shared-links-form-modal")
+      if shared_link do
+        socket |> assign(form_shared_link: shared_link) |> Modal.open("shared-links-form-modal")
+      else
+        put_live_flash(socket, :error, "Could not find Shared Link")
+      end
 
     {:noreply, socket}
   end

@@ -1,4 +1,9 @@
 defmodule Plausible.Stats.Imported do
+  @moduledoc """
+  Module defining functions that merge imported query into a native one,
+  and also functions that decide whether imported data is eligible for
+  a given query.
+  """
   use Plausible.ClickhouseRepo
   use Plausible.Stats.SQL.Fragments
 
@@ -18,11 +23,16 @@ defmodule Plausible.Stats.Imported do
   Usually, when no filters are used, the imported schema supports the
   query. There is one exception though - breakdown by a custom property.
   We are currently importing only two custom properties - `url` and `path`.
-  Both these properties can only be used with their special goal filter
-  (see Plausible.Goals.SystemGoals).
+  Both these properties can only be used with their particular `event:name`
+  filter or the corresponding goal filter (see Plausible.Event.SystemEvents).
   """
   def schema_supports_query?(query) do
     length(Imported.Base.decide_tables(query)) > 0
+  end
+
+  def schema_supports_interval?(query) do
+    "time:minute" not in query.dimensions and
+      "time:hour" not in query.dimensions
   end
 
   def merge_imported_country_suggestions(native_q, _site, %Plausible.Stats.Query{
@@ -352,9 +362,12 @@ defmodule Plausible.Stats.Imported do
     :exit_rate,
     :scroll_depth,
     :percentage,
+    :bounce_rate,
     :conversion_rate,
     :group_conversion_rate,
-    :time_on_page
+    :time_on_page,
+    :total_revenue,
+    :average_revenue
   ]
 
   defp can_order_by?(query) do

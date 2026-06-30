@@ -15,15 +15,44 @@ defmodule Plausible.Auth do
 
   require Logger
 
+  case Mix.env() do
+    :e2e_test ->
+      @ip_rate_limit 100_000
+      @user_rate_limit 100_000
+      @activation_limit 100_000
+      @activation_ip_limit 100_000
+      @activation_request_limit 100_000
+      @totp_setup_limit 100_000
+      @totp_setup_ip_limit 100_000
+
+    env when env in [:test, :ce_test] ->
+      @ip_rate_limit 5
+      @user_rate_limit 5
+      @activation_limit 10
+      @totp_setup_limit 10
+      @activation_ip_limit 100_000
+      @totp_setup_ip_limit 100_000
+      @activation_request_limit 100_000
+
+    _ ->
+      @ip_rate_limit 5
+      @user_rate_limit 5
+      @activation_limit 10
+      @totp_setup_limit 10
+      @activation_ip_limit 2
+      @totp_setup_ip_limit 2
+      @activation_request_limit 5
+  end
+
   @rate_limits %{
     login_ip: %{
       prefix: "login:ip",
-      limit: 5,
+      limit: @ip_rate_limit,
       interval: :timer.seconds(60)
     },
     login_user: %{
       prefix: "login:user",
-      limit: 5,
+      limit: @user_rate_limit,
       interval: :timer.seconds(60)
     },
     email_change_user: %{
@@ -35,6 +64,36 @@ defmodule Plausible.Auth do
       prefix: "password-change:user",
       limit: 5,
       interval: :timer.minutes(20)
+    },
+    activation_ip: %{
+      prefix: "activation:ip",
+      limit: @activation_ip_limit,
+      interval: :timer.minutes(1)
+    },
+    activation_user: %{
+      prefix: "activation:user",
+      limit: @activation_limit,
+      interval: :timer.minutes(5)
+    },
+    activation_request_ip: %{
+      prefix: "activation-request:ip",
+      limit: @activation_request_limit,
+      interval: :timer.minutes(1)
+    },
+    activation_request_user: %{
+      prefix: "activation-request:user",
+      limit: @activation_request_limit,
+      interval: :timer.minutes(10)
+    },
+    totp_setup_ip: %{
+      prefix: "totp-setup:ip",
+      limit: @totp_setup_ip_limit,
+      interval: :timer.minutes(1)
+    },
+    totp_setup_user: %{
+      prefix: "totp-setup:user",
+      limit: @totp_setup_limit,
+      interval: :timer.minutes(5)
     }
   }
 
@@ -173,14 +232,14 @@ defmodule Plausible.Auth do
   end
 
   on_ee do
-    def is_super_admin?(nil), do: false
-    def is_super_admin?(%Plausible.Auth.User{id: id}), do: is_super_admin?(id)
+    def super_admin?(nil), do: false
+    def super_admin?(%Plausible.Auth.User{id: id}), do: super_admin?(id)
 
-    def is_super_admin?(user_id) when is_integer(user_id) do
+    def super_admin?(user_id) when is_integer(user_id) do
       user_id in Application.get_env(:plausible, :super_admin_user_ids)
     end
   else
-    def is_super_admin?(_), do: always(false)
+    def super_admin?(_), do: always(false)
   end
 
   @spec list_api_keys(Auth.User.t(), Teams.Team.t() | nil) :: [Auth.ApiKey.t()]
@@ -239,13 +298,22 @@ defmodule Plausible.Auth do
     end
   end
 
-  @spec find_api_key(String.t(), Keyword.t()) ::
+  @spec find_api_key(String.t()) ::
+          {:ok, %{api_key: Auth.ApiKey.t(), team: Teams.Team.t() | nil}}
+          | {:error, :invalid_api_key}
+  def find_api_key(raw_key) do
+    find_api_key(raw_key, nil, nil)
+  end
+
+  @spec find_api_key_for_team_of_site(String.t(), String.t() | nil) ::
           {:ok, %{api_key: Auth.ApiKey.t(), team: Teams.Team.t() | nil}}
           | {:error, :invalid_api_key | :missing_site_id}
-  def find_api_key(raw_key, opts \\ []) do
-    {team_scope, id} = Keyword.get(opts, :team_by, {nil, nil})
+  def find_api_key_for_team_of_site(_raw_key, site_domain) when site_domain in [nil, ""] do
+    {:error, :missing_site_id}
+  end
 
-    find_api_key(raw_key, team_scope, id)
+  def find_api_key_for_team_of_site(raw_key, site_domain) do
+    find_api_key(raw_key, :site, site_domain)
   end
 
   defp scope_api_keys_by_team(query, nil) do

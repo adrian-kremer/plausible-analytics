@@ -37,15 +37,16 @@ export default function FilterModalGroup({
 
   return (
     <>
-      <div className="mt-6">
+      <div>
         {showTitle && (
-          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <div className="text-sm font-medium text-gray-800 dark:text-gray-200">
             {formattedFilters[filterGroup]}
           </div>
         )}
         {rows.map(({ id, filter }) =>
           filterGroup === 'props' ? (
             <FilterModalPropsRow
+              testId={id}
               key={id}
               filter={filter}
               showDelete={rows.length > 1}
@@ -55,6 +56,7 @@ export default function FilterModalGroup({
             />
           ) : (
             <FilterModalRow
+              testId={id}
               key={id}
               filter={filter}
               labels={labels}

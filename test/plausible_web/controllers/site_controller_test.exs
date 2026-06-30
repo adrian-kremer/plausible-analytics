@@ -146,25 +146,6 @@ defmodule PlausibleWeb.SiteControllerTest do
       assert site_card =~ site.domain
     end
 
-    test "shows invitations for user by email address", %{conn: conn, user: user} do
-      inviter = new_user()
-      site = new_site(owner: inviter)
-      invite_guest(site, user, inviter: inviter, role: :editor)
-      conn = get(conn, "/sites")
-
-      assert html_response(conn, 200) =~ site.domain
-    end
-
-    test "invitations are case insensitive", %{conn: conn, user: user} do
-      inviter = new_user()
-      site = new_site(owner: inviter)
-      invite_guest(site, String.upcase(user.email), inviter: inviter, role: :editor)
-
-      conn = get(conn, "/sites")
-
-      assert html_response(conn, 200) =~ site.domain
-    end
-
     test "paginates sites", %{conn: initial_conn, user: user} do
       for i <- 1..25 do
         new_site(
@@ -173,7 +154,7 @@ defmodule PlausibleWeb.SiteControllerTest do
         )
       end
 
-      conn = get(initial_conn, "/sites")
+      conn = get(initial_conn, "/sites?sort_by=alnum&sort_direction=asc")
       resp = html_response(conn, 200)
 
       for i <- 1..24 do
@@ -233,22 +214,100 @@ defmodule PlausibleWeb.SiteControllerTest do
       assert resp =~ nag_message
     end
 
+    @tag :ee_only
+    test "shows upgrade button in header when user is on trial and team is not setup",
+         %{conn: conn, user: user} do
+      new_site(owner: user)
+
+      conn = get(conn, "/sites")
+      resp = html_response(conn, 200)
+
+      assert element_exists?(
+               resp,
+               ~s|a[href="#{Routes.settings_path(conn, :subscription)}"]|
+             )
+
+      assert text_of_element(
+               resp,
+               ~s|a[href="#{Routes.settings_path(conn, :subscription)}"]|
+             ) =~ "Upgrade"
+    end
+
+    @tag :ee_only
+    test "shows upgrade button in header when user is on trial and is owner of a setup team",
+         %{conn: conn, user: user} do
+      {:ok, team} = Plausible.Teams.get_or_create(user)
+      team = Plausible.Teams.complete_setup(team)
+      conn = set_current_team(conn, team)
+
+      conn = get(conn, "/sites")
+      resp = html_response(conn, 200)
+
+      assert element_exists?(
+               resp,
+               ~s|a[href="#{Routes.settings_path(conn, :subscription)}"]|
+             )
+    end
+
+    @tag :ee_only
+    test "shows upgrade button in header when user is on trial and has billing role in a setup team",
+         %{conn: base_conn} do
+      member = new_user()
+      owner = new_user(trial_expiry_date: Date.add(Date.utc_today(), 30))
+      {:ok, team} = Plausible.Teams.get_or_create(owner)
+      team = Plausible.Teams.complete_setup(team)
+      add_member(team, user: member, role: :billing)
+
+      {:ok, conn: conn} = log_in(%{user: member, conn: base_conn})
+      conn = set_current_team(conn, team)
+
+      conn = get(conn, "/sites")
+      resp = html_response(conn, 200)
+
+      assert element_exists?(
+               resp,
+               ~s|a[href="#{Routes.settings_path(conn, :subscription)}"]|
+             )
+    end
+
+    @tag :ee_only
+    test "does not show upgrade button in header when user is on trial but has non-billing role in a setup team",
+         %{conn: base_conn} do
+      for role <- [:admin, :editor, :viewer] do
+        member = new_user()
+        owner = new_user()
+        {:ok, team} = Plausible.Teams.get_or_create(owner)
+        team = Plausible.Teams.complete_setup(team)
+        add_member(team, user: member, role: role)
+
+        {:ok, conn: conn} = log_in(%{user: member, conn: base_conn})
+        conn = set_current_team(conn, team)
+        resp = conn |> get("/sites") |> html_response(200)
+
+        refute element_exists?(
+                 resp,
+                 ~s|a[href="#{Routes.settings_path(conn, :subscription)}"]|
+               ),
+               "expected no Upgrade button for role #{role}"
+      end
+    end
+
     test "filters by domain", %{conn: conn, user: user} do
-      _site1 = new_site(domain: "first.example.com", owner: user)
-      _site2 = new_site(domain: "second.example.com", owner: user)
+      _site1 = new_site(domain: "alpha.example.com", owner: user)
+      _site2 = new_site(domain: "beta.example.com", owner: user)
       _rogue_site = new_site()
 
       inviter = new_user()
 
-      new_site(owner: inviter, domain: "first-another.example.com")
-      |> invite_guest(user, inviter: inviter, role: :viewer)
+      site3 = new_site(owner: inviter, domain: "alpha-another.example.com")
+      add_guest(site3, user: user, role: :viewer)
 
-      conn = get(conn, "/sites", filter_text: "first")
+      conn = get(conn, "/sites", filter_text: "alpha")
       resp = html_response(conn, 200)
 
-      assert resp =~ "first.example.com"
-      assert resp =~ "first-another.example.com"
-      refute resp =~ "second.example.com"
+      assert resp =~ "alpha.example.com"
+      assert resp =~ "alpha-another.example.com"
+      refute resp =~ "beta.example.com"
     end
 
     test "does not show empty state when filter returns empty but there are sites", %{
@@ -482,11 +541,25 @@ defmodule PlausibleWeb.SiteControllerTest do
           }
         })
 
-      assert html_response(conn, 200) =~ "only letters, numbers, slashes and period allowed"
+      assert html_response(conn, 200) =~
+               "only letters, numbers, slashes, underscores and period allowed"
+    end
+
+    test "underscores are allowed in the domain", %{conn: conn} do
+      conn =
+        post(conn, "/sites", %{
+          "site" => %{
+            "timezone" => "Europe/London",
+            "domain" => "example.com/some_blog_site"
+          }
+        })
+
+      assert redirected_to(conn) ==
+               "/example.com%2Fsome_blog_site/installation?site_created=true&flow="
     end
 
     test "renders form again when it is a duplicate domain", %{conn: conn} do
-      insert(:site, domain: "example.com")
+      new_site(domain: "example.com")
 
       conn =
         post(conn, "/sites", %{
@@ -546,6 +619,49 @@ defmodule PlausibleWeb.SiteControllerTest do
 
       assert redirected_to(conn) ==
                "/example.com/installation?site_created=true&flow="
+    end
+
+    for role <- [:owner, :admin, :editor] do
+      test "redirects to stats when user already has #{role} access to the duplicate domain",
+           %{
+             conn: conn,
+             user: user
+           } do
+        site = new_site(domain: "example.com")
+        add_member(site.team, user: user, role: unquote(role))
+
+        conn =
+          post(conn, "/sites", %{
+            "site" => %{
+              "domain" => "example.com",
+              "timezone" => "Europe/London"
+            }
+          })
+
+        assert redirected_to(conn) == "/example.com"
+      end
+    end
+
+    for role <- Plausible.Teams.Membership.roles() -- [:owner, :admin, :editor] do
+      test "#{role} trying access the duplicate domain, an error is shown",
+           %{
+             conn: conn,
+             user: user
+           } do
+        site = new_site(domain: "example.com")
+        add_member(site.team, user: user, role: unquote(role))
+
+        conn =
+          post(conn, "/sites", %{
+            "site" => %{
+              "domain" => "example.com",
+              "timezone" => "Europe/London"
+            }
+          })
+
+        assert html_response(conn, 200) =~
+                 "This domain cannot be registered. Perhaps one of your colleagues registered it?"
+      end
     end
   end
 
@@ -1771,130 +1887,15 @@ defmodule PlausibleWeb.SiteControllerTest do
     end
   end
 
-  describe "change team" do
+  describe "settings danger zone" do
     setup [:create_user, :log_in, :create_site]
 
-    test "no change team section appears when <1 team", %{conn: conn, site: site} do
+    test "renders the transfer tile", %{conn: conn, site: site} do
       conn = get(conn, Routes.site_path(conn, :settings_danger_zone, site.domain))
       html = html_response(conn, 200)
       assert html =~ "Danger zone"
+      assert html =~ "Transfer site"
       assert html =~ "Delete #{site.domain}"
-      refute html =~ "Change #{site.domain} team"
-    end
-
-    test "change team section appears when >1 team", %{user: user, conn: conn, site: site} do
-      join_2nd_team(user)
-
-      conn = get(conn, Routes.site_path(conn, :settings_danger_zone, site.domain))
-      html = html_response(conn, 200)
-      assert html =~ "Danger zone"
-      assert html =~ "Delete #{site.domain}"
-      assert html =~ "Change #{site.domain} team"
-    end
-
-    test "change team form renders", %{user: user, conn: conn, site: site} do
-      join_2nd_team(user)
-
-      conn = get(conn, Routes.membership_path(conn, :change_team_form, site.domain))
-      html = html_response(conn, 200)
-      assert html =~ "Change the team of #{site.domain}"
-
-      assert element_exists?(
-               html,
-               ~s|form[action="#{Routes.membership_path(conn, :change_team, site.domain)}"]|
-             )
-
-      assert element_exists?(html, ~s|button[type=submit]|)
-    end
-
-    @tag :ee_only
-    test "change team form error: destination team has no subscription", %{
-      user: user,
-      conn: conn,
-      site: site
-    } do
-      team2 = join_2nd_team(user)
-
-      conn =
-        post(
-          conn,
-          Routes.membership_path(conn, :change_team, site.domain,
-            team_identifier: team2.identifier
-          )
-        )
-
-      html = html_response(conn, 200)
-      assert text(html) =~ "This team doesn't have a subscription"
-    end
-
-    @tag :ee_only
-    test "change team form error: subscription insufficient", %{
-      user: user,
-      conn: conn,
-      site: site
-    } do
-      team2 = join_2nd_team(user, subscribe?: true)
-
-      generate_usage_for(site, 11_000, NaiveDateTime.utc_now() |> NaiveDateTime.shift(day: -5))
-      generate_usage_for(site, 11_000, NaiveDateTime.utc_now() |> NaiveDateTime.shift(day: -35))
-
-      conn =
-        post(
-          conn,
-          Routes.membership_path(conn, :change_team, site.domain,
-            team_identifier: team2.identifier
-          )
-        )
-
-      html = html_response(conn, 200)
-
-      assert text(html) =~ "This site's usage is over the limits of the team's subscription"
-    end
-
-    test "change team form error: unknown team identifier", %{
-      conn: conn,
-      site: site
-    } do
-      assert_raise Ecto.NoResultsError, fn ->
-        post(
-          conn,
-          Routes.membership_path(conn, :change_team, site.domain,
-            team_identifier: Ecto.UUID.generate()
-          )
-        )
-      end
-    end
-
-    test "successfully changes team", %{
-      user: user,
-      conn: conn,
-      site: site
-    } do
-      team2 = join_2nd_team(user, subscribe?: true)
-
-      conn =
-        post(
-          conn,
-          Routes.membership_path(conn, :change_team, site.domain,
-            team_identifier: team2.identifier
-          )
-        )
-
-      assert redirected_to(conn) == "/sites?__team=#{team2.identifier}"
-      assert Phoenix.Flash.get(conn.assigns.flash, :success) =~ "Site team was changed"
-    end
-
-    defp join_2nd_team(user, opts \\ []) do
-      another = new_user()
-      new_site(owner: another)
-      team2 = team_of(another)
-      add_member(team2, user: user, role: :admin)
-
-      if opts[:subscribe?] do
-        subscribe_to_growth_plan(another)
-      end
-
-      team2
     end
   end
 end

@@ -1,15 +1,11 @@
 <%= if @success do %>
-  Ihr CSV-Import wurde erfolgreich abgeschlossen. Das Statofweb-Analytics-Dashboard für {@site_import.site.domain} enthält nun historische importierte Daten vom {date_format(
+  Ihr CSV-Import wurde erfolgreich abgeschlossen. Das {Plausible.product_name()}-Dashboard für {@site_import.site.domain} enthält nun historische Daten vom {date_format(
     @site_import.start_date
-  )} bis {date_format(@site_import.end_date)}
-  <br /><br />
-  <a href={@link}>Klicken Sie hier</a>,
-  um Ihr Dashboard anzuzeigen.
+  )} bis {date_format(@site_import.end_date)}. <br /><br />
+  <a href={@link}>Dashboard anzeigen</a>.
 <% else %>
   Leider wurde Ihr CSV-Import für {@site_import.site.domain} nicht erfolgreich abgeschlossen. Das tut uns leid!
-  <br /><br /> Bitte versuchen Sie den Import noch einmal.
-  <%= if ee?() do %>
-    <br /> <br />
-    Bitte antworten Sie auf diese E-Mail, um uns mitzuteilen, wenn Sie weiterhin Probleme mit dem Import haben.
-  <% end %>
+  <br /><br /> Bitte stellen Sie sicher, dass Ihre CSV-Dateien
+  <a href="https://plausible.io/docs/csv-import#csv-format-guidelines">unseren Formatrichtlinien</a>
+  entsprechen, und versuchen Sie den Import erneut.
 <% end %>

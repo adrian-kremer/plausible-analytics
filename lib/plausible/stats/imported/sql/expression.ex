@@ -72,7 +72,7 @@ defmodule Plausible.Stats.Imported.SQL.Expression do
   end
 
   defp select_metric(:bounce_rate, "imported_pages", _query) do
-    wrap_alias([i], %{bounces: 0, __internal_visits: 0})
+    wrap_alias([i], %{bounces: fragment("any(0)"), __internal_visits: fragment("any(0)")})
   end
 
   defp select_metric(:bounce_rate, "imported_exit_pages", _query) do
@@ -92,31 +92,61 @@ defmodule Plausible.Stats.Imported.SQL.Expression do
   end
 
   defp select_metric(:visit_duration, "imported_pages", _query) do
-    wrap_alias([i], %{visit_duration: 0})
+    wrap_alias([i], %{visit_duration: 0, total_visit_duration: 0})
   end
 
   defp select_metric(:visit_duration, "imported_exit_pages", _query) do
-    wrap_alias([i], %{visit_duration: sum(i.visit_duration), __internal_visits: sum(i.exits)})
+    wrap_alias([i], %{
+      visit_duration:
+        fragment("ifNotFinite(round(? / ?), 0)", sum(i.visit_duration), sum(i.exits)),
+      total_visit_duration: sum(i.visit_duration),
+      __internal_visits: sum(i.exits)
+    })
   end
 
   defp select_metric(:visit_duration, "imported_entry_pages", _query) do
-    wrap_alias([i], %{visit_duration: sum(i.visit_duration), __internal_visits: sum(i.entrances)})
+    wrap_alias([i], %{
+      visit_duration:
+        fragment("ifNotFinite(round(? / ?), 0)", sum(i.visit_duration), sum(i.entrances)),
+      total_visit_duration: sum(i.visit_duration),
+      __internal_visits: sum(i.entrances)
+    })
   end
 
   defp select_metric(:visit_duration, _table, _query) do
-    wrap_alias([i], %{visit_duration: sum(i.visit_duration), __internal_visits: sum(i.visits)})
+    wrap_alias([i], %{
+      visit_duration:
+        fragment("ifNotFinite(round(? / ?), 0)", sum(i.visit_duration), sum(i.visits)),
+      total_visit_duration: sum(i.visit_duration),
+      __internal_visits: sum(i.visits)
+    })
   end
 
   defp select_metric(:views_per_visit, "imported_exit_pages", _query) do
-    wrap_alias([i], %{pageviews: sum(i.pageviews), __internal_visits: sum(i.exits)})
+    wrap_alias([i], %{
+      views_per_visit:
+        fragment("ifNotFinite(round(? / ?, 2), 0)", sum(i.pageviews), sum(i.exits)),
+      pageviews: sum(i.pageviews),
+      __internal_visits: sum(i.exits)
+    })
   end
 
   defp select_metric(:views_per_visit, "imported_entry_pages", _query) do
-    wrap_alias([i], %{pageviews: sum(i.pageviews), __internal_visits: sum(i.entrances)})
+    wrap_alias([i], %{
+      views_per_visit:
+        fragment("ifNotFinite(round(? / ?, 2), 0)", sum(i.pageviews), sum(i.entrances)),
+      pageviews: sum(i.pageviews),
+      __internal_visits: sum(i.entrances)
+    })
   end
 
   defp select_metric(:views_per_visit, _table, _query) do
-    wrap_alias([i], %{pageviews: sum(i.pageviews), __internal_visits: sum(i.visits)})
+    wrap_alias([i], %{
+      views_per_visit:
+        fragment("ifNotFinite(round(? / ?, 2), 0)", sum(i.pageviews), sum(i.visits)),
+      pageviews: sum(i.pageviews),
+      __internal_visits: sum(i.visits)
+    })
   end
 
   defp select_metric(:scroll_depth, "imported_pages", _query) do
@@ -246,6 +276,20 @@ defmodule Plausible.Stats.Imported.SQL.Expression do
     })
   end
 
+  # Rows imported from Plausible store `imported_locations.region` as ISO 3166-2 code.
+  # Rows imported from GA4 have `imported_locations.region` set to region name
+  # (e.g. "California").
+  #
+  # imported_locations.region_name is an alias column that looks up the name by the ISO code.
+  # Lookup by values imported from GA4 (e.g. "California"), will yield an empty string.
+  #
+  # This function ensures that in those scenarios, the region name is set to the region code.
+  defp select_group_fields(q, "visit:region_name", key, _query) do
+    select_merge_as(q, [i], %{
+      key => fragment("if(empty(?), ?, ?)", i.region_name, i.region, i.region_name)
+    })
+  end
+
   defp select_group_fields(q, dimension, key, _query) do
     select_merge_as(q, [i], %{key => field(i, ^dim(dimension))})
   end
@@ -268,7 +312,7 @@ defmodule Plausible.Stats.Imported.SQL.Expression do
   defp filter_group_values(q, "visit:city"), do: where(q, [i], i.city != 0 and not is_nil(i.city))
 
   defp filter_group_values(q, "visit:country_name"), do: where(q, [i], i.country_name != "ZZ")
-  defp filter_group_values(q, "visit:region_name"), do: where(q, [i], i.region_name != "")
+  defp filter_group_values(q, "visit:region_name"), do: where(q, [i], i.region != "")
   defp filter_group_values(q, "visit:city_name"), do: where(q, [i], i.city_name != "")
 
   defp filter_group_values(q, _dimension), do: q
@@ -373,7 +417,7 @@ defmodule Plausible.Stats.Imported.SQL.Expression do
           """,
           s.__internal_visits,
           i.__internal_visits,
-          i.visit_duration,
+          i.total_visit_duration,
           s.visit_duration,
           s.__internal_visits,
           s.__internal_visits,

@@ -14,7 +14,7 @@ Während des letzten Abrechnungszyklus ({PlausibleWeb.TextHelpers.format_date_ra
 <% else %>
   <a href={PlausibleWeb.Router.Helpers.billing_url(PlausibleWeb.Endpoint, :choose_plan) <> "?__team=#{@team.identifier}"}>Klicken Sie hier, um Ihr Abonnement zu upgraden</a>. Wir empfehlen Ihnen, auf den {@suggested_volume}/Monat-Tarif zu upgraden. Die neue Gebühr wird anteilig berechnet, um den bereits gezahlten Betrag und die Zeit bis zum Ablauf Ihres aktuellen Abonnements zu berücksichtigen.
   <br /><br />
-  Falls Ihre Nutzung in Zukunft abnimmt, können Sie jederzeit zu einem niedrigeren Tarif wechseln. Jedes Guthaben wird automatisch auf zukünftige Zahlungen angerechnet.
+  Falls Ihre Nutzung in Zukunft abnimmt, können Sie jederzeit zu einem niedrigeren Tarif wechseln. Jedes Guthaben wird automatisch auf zukünftige Zahlungen angerechnet. Falls Ihr Traffic bereits wieder innerhalb Ihrer Tariflimits liegt, wird Ihr Dashboard automatisch zu Beginn Ihres nächsten Abrechnungszyklus freigeschaltet. Es ist keine Aktion erforderlich.
 <% end %>
 <br /><br />
 Haben Sie Fragen oder benötigen Sie Hilfe? Antworten Sie einfach auf diese E-Mail. Wir sind hier, um zu helfen!

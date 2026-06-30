@@ -34,11 +34,14 @@ defmodule Plausible.CustomerSupport.Resource.Site do
       from s in Plausible.Site.regular(),
         inner_join: t in assoc(s, :team),
         inner_join: o in assoc(t, :owners),
+        left_join: tsc in assoc(s, :tracker_script_configuration),
         where:
           ilike(s.domain, ^"%#{input}%") or ilike(t.name, ^"%#{input}%") or
-            ilike(o.name, ^"%#{input}%") or ilike(o.email, ^"%#{input}%"),
+            ilike(o.name, ^"%#{input}%") or ilike(o.email, ^"%#{input}%") or
+            ilike(s.domain_changed_from, ^"%#{input}%") or tsc.id == ^input,
         order_by: [
           desc: fragment("?.domain = ?", s, ^input),
+          desc: fragment("?.domain_changed_from = ?", s, ^input),
           desc: fragment("?.name = ?", t, ^input),
           desc: fragment("?.name = ?", o, ^input),
           desc: fragment("?.email = ?", o, ^input),

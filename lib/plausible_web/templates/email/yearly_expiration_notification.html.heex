@@ -1,6 +1,6 @@
 Wie die Zeit vergeht! Dies ist eine Erinnerung, dass Ihr Jahresabonnement für {Plausible.product_name()} am {@next_bill_date} abläuft.
 <br /><br /> Sie müssen
-<a href={PlausibleWeb.Router.Helpers.billing_url(PlausibleWeb.Endpoint, :choose_plan) <> "?__team=#{@team.identifier}"}>Ihr Abonnement verlängern</a>, wenn Sie Plausible weiterhin nutzen möchten, um Ihre Website-Statistiken auf datenschutzfreundliche Weise zu zählen.
+<a href={choose_plan_url(@team)}>Ihr Abonnement verlängern</a>, wenn Sie Plausible weiterhin nutzen möchten, um Ihre Website-Statistiken auf datenschutzfreundliche Weise zu zählen.
 <br /><br />
 Falls Sie Ihr Abonnement nicht fortsetzen möchten, ist keine Aktion erforderlich. Sie verlieren am {@next_bill_date} den Zugang zu Ihrem Dashboard und wir hören am {@accept_traffic_until} auf, Statistiken zu akzeptieren.
 <br /><br />

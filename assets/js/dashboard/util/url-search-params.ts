@@ -1,9 +1,13 @@
-import { Filter, FilterClauseLabels } from '../query'
+import {
+  getSearchToSetSegmentFilter,
+  SavedSegment
+} from '../filtering/segments'
+import { Filter, FilterClauseLabels } from '../dashboard-state'
 import { v1 } from './url-search-params-v1'
 import { v2 } from './url-search-params-v2'
 
 /**
- * These charcters are not URL encoded to have more readable URLs.
+ * These characters are not URL encoded to have more readable URLs.
  * Browsers seem to handle this just fine.
  * `?f=is,page,/my/page/:some_param` vs `?f=is,page,%2Fmy%2Fpage%2F%3Asome_param``
  */
@@ -14,6 +18,69 @@ export const FILTER_URL_PARAM_NAME = 'f'
 const LABEL_URL_PARAM_NAME = 'l'
 
 const REDIRECTED_SEARCH_PARAM_NAME = 'r'
+
+const API_VERSION_RELOAD_PARAM_NAME = 'api_version_reloaded'
+
+const EXPECTED_API_VERSION = parseInt(
+  document
+    .querySelector('meta[name="x-api-version"]')
+    ?.getAttribute('content') ?? '0',
+  10
+)
+
+/**
+ * Navigates to the current URL with `api_version_reloaded=<currentApiVersion>`
+ * appended, using `location.replace` so the pre-reload entry is not kept in
+ * browser history.
+ *
+ * Returns early without navigating if:
+ *
+ * - the x-plausible-version response header is not present
+ * - the expected version matches the actual version
+ * - the version is already present in search params
+ *
+ * The latter prevents an infinite reload loop when the versions are
+ * permanently out of sync.
+ *
+ * BE: lib/plausible_web/plugs/internal_stats_api_version.ex
+ */
+export function maybeReloadForApiVersion(
+  windowLocation: Location,
+  responseHeaders: Headers
+) {
+  const currentApiVersion = getCurrentApiVersion(responseHeaders)
+  const params = new URLSearchParams(windowLocation.search)
+
+  if (
+    currentApiVersion === null ||
+    currentApiVersion <= EXPECTED_API_VERSION ||
+    params.get(API_VERSION_RELOAD_PARAM_NAME) === currentApiVersion.toString()
+  ) {
+    return
+  }
+
+  console.warn('API version mismatch detected, reloading...')
+
+  const newSearch = searchWithApiVersionReload(
+    windowLocation.search,
+    currentApiVersion.toString()
+  )
+  windowLocation.replace(
+    `${windowLocation.pathname}${newSearch}${windowLocation.hash}`
+  )
+}
+
+function getCurrentApiVersion(responseHeaders: Headers): number | null {
+  const versionString = responseHeaders?.get('x-api-version')
+  return versionString ? parseInt(versionString, 10) : null
+}
+
+function searchWithApiVersionReload(search: string, value: string): string {
+  return stringifySearch({
+    ...parseSearch(search),
+    [API_VERSION_RELOAD_PARAM_NAME]: value
+  })
+}
 
 /**
  * This function is able to serialize for URL simple params @see serializeSimpleSearchEntry as well
@@ -230,8 +297,10 @@ function isAlreadyRedirected(searchParams: URLSearchParams) {
   The purpose of this function is to redirect users from one of the previous versions to the current version, 
   so previous dashboard links still work.
 */
-export function getRedirectTarget(windowLocation: Location): null | string {
-  const searchParams = new URLSearchParams(windowLocation.search)
+export function maybeGetLatestReadableSearch(
+  searchString: string
+): null | string {
+  const searchParams = new URLSearchParams(searchString)
   if (isAlreadyRedirected(searchParams)) {
     return null
   }
@@ -241,28 +310,67 @@ export function getRedirectTarget(windowLocation: Location): null | string {
   }
 
   const isV2 = v2.isV2(searchParams)
+  const isV1 = v1.isV1(searchParams)
+
   if (isV2) {
-    return `${windowLocation.pathname}${stringifySearch({ ...v2.parseSearch(windowLocation.search), [REDIRECTED_SEARCH_PARAM_NAME]: 'v2' })}`
+    return stringifySearch({
+      ...v2.parseSearch(searchString),
+      [REDIRECTED_SEARCH_PARAM_NAME]: 'v2'
+    })
   }
 
-  const searchRecord = v2.parseSearch(windowLocation.search)
-  const isV1 = v1.isV1(searchRecord)
-
-  if (!isV1) {
-    return null
+  if (isV1) {
+    return stringifySearch({
+      ...v1.parseSearch(searchString),
+      [REDIRECTED_SEARCH_PARAM_NAME]: 'v1'
+    })
   }
 
-  return `${windowLocation.pathname}${stringifySearch({ ...v1.parseSearchRecord(searchRecord), [REDIRECTED_SEARCH_PARAM_NAME]: 'v1' })}`
+  return null
+}
+
+/**
+ * It's possible to set a particular segment to be always applied on the data on dashboards accessed with a shared link.
+ * This function ensures that the particular segment filter is set to the URL string on initial page load.
+ * Other functions ensure that it can't be removed.
+ */
+export function getSearchWithEnforcedSegment(
+  searchString: string,
+  enforcedSegment: Pick<SavedSegment, 'id' | 'name'>
+): string {
+  const searchRecord = parseSearch(searchString)
+  return stringifySearch(
+    getSearchToSetSegmentFilter(enforcedSegment)(searchRecord)
+  )
 }
 
 /** Called once before React app mounts. If legacy url search params are present, does a redirect to new format. */
-export function redirectForLegacyParams(
+export function maybeDoFERedirect(
   windowLocation: Location,
-  windowHistory: History
+  windowHistory: History,
+  enforcedSegment: Pick<SavedSegment, 'id' | 'name'> | null
 ) {
-  const redirectTargetURL = getRedirectTarget(windowLocation)
-  if (redirectTargetURL === null) {
+  const originalSearchString = windowLocation.search
+
+  let updatedSearchString = maybeGetLatestReadableSearch(originalSearchString)
+
+  if (enforcedSegment) {
+    updatedSearchString = getSearchWithEnforcedSegment(
+      updatedSearchString ?? originalSearchString,
+      enforcedSegment
+    )
+  }
+
+  if (
+    updatedSearchString === null ||
+    updatedSearchString === originalSearchString
+  ) {
     return
   }
-  windowHistory.pushState({}, '', redirectTargetURL)
+
+  windowHistory.pushState(
+    {},
+    '',
+    `${windowLocation.pathname}${updatedSearchString}`
+  )
 }

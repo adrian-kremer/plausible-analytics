@@ -21,6 +21,9 @@ defmodule Plausible.Teams.Billing do
 
   @limit_sites_since ~D[2021-05-05]
 
+  @max_sites_for_usage_breakdown 10
+  def max_sites_for_usage_breakdown, do: @max_sites_for_usage_breakdown
+
   @typep last_30_days_usage() :: %{:last_30_days => Quota.usage_cycle()}
   @typep monthly_pageview_usage() :: Quota.cycles_usage() | last_30_days_usage()
 
@@ -48,7 +51,7 @@ defmodule Plausible.Teams.Billing do
 
     limit_checking_opts =
       if team.allow_next_upgrade_override do
-        [ignore_pageview_limit: true]
+        [skip_pageview_limit_check?: true]
       else
         []
       end
@@ -216,7 +219,7 @@ defmodule Plausible.Teams.Billing do
   @doc """
   Returns the number of sites the given team owns.
   """
-  @spec site_usage(Teams.Team.t()) :: non_neg_integer()
+  @spec site_usage(Teams.Team.t() | nil) :: non_neg_integer()
   def site_usage(nil), do: 0
 
   def site_usage(team) do
@@ -347,7 +350,7 @@ defmodule Plausible.Teams.Billing do
   team owns. Alternatively, given an optional argument of `site_ids`, the usage from
   across all those sites is queried instead.
   """
-  @spec monthly_pageview_usage(Teams.Team.t(), list() | nil) :: monthly_pageview_usage()
+  @spec monthly_pageview_usage(Teams.Team.t() | nil, list() | nil) :: monthly_pageview_usage()
   def monthly_pageview_usage(team, site_ids \\ nil)
 
   def monthly_pageview_usage(team, nil) do
@@ -373,7 +376,7 @@ defmodule Plausible.Teams.Billing do
     end
   end
 
-  @spec team_member_usage(Teams.Team.t(), Keyword.t()) :: non_neg_integer()
+  @spec team_member_usage(Teams.Team.t() | nil, Keyword.t()) :: non_neg_integer()
   @doc """
   Returns the total count of team members associated with the team's sites.
 
@@ -426,7 +429,8 @@ defmodule Plausible.Teams.Billing do
       date_range: date_range,
       pageviews: pageviews,
       custom_events: custom_events,
-      total: pageviews + custom_events
+      total: pageviews + custom_events,
+      per_site: per_site_usage(owned_site_ids, date_range)
     }
   end
 
@@ -465,8 +469,48 @@ defmodule Plausible.Teams.Billing do
       date_range: date_range,
       pageviews: pageviews,
       custom_events: custom_events,
-      total: pageviews + custom_events
+      total: pageviews + custom_events,
+      per_site: per_site_usage(owned_site_ids, date_range)
     }
+  end
+
+  defp per_site_usage(owned_site_ids, _date_range)
+       when length(owned_site_ids) <= 1 or length(owned_site_ids) > @max_sites_for_usage_breakdown,
+       do: []
+
+  defp per_site_usage(owned_site_ids, date_range) do
+    per_site_usage_breakdown =
+      Plausible.Stats.Clickhouse.per_site_usage_breakdown(owned_site_ids, date_range)
+
+    active_site_ids = Enum.map(per_site_usage_breakdown, fn {site_id, _, _} -> site_id end)
+    inactive_site_ids = owned_site_ids -- active_site_ids
+
+    domains =
+      Map.new(
+        Repo.all(
+          from(s in Plausible.Site,
+            where: s.id in ^owned_site_ids,
+            select: {s.id, s.domain}
+          )
+        )
+      )
+
+    usage_mapping =
+      Map.new(per_site_usage_breakdown, fn {site_id, pageviews, custom_events} ->
+        {site_id, %{pageviews: pageviews, custom_events: custom_events}}
+      end)
+
+    Enum.map(active_site_ids ++ inactive_site_ids, fn site_id ->
+      pageviews = usage_mapping[site_id][:pageviews] || 0
+      custom_events = usage_mapping[site_id][:custom_events] || 0
+
+      %{
+        domain: Map.get(domains, site_id),
+        pageviews: pageviews,
+        custom_events: custom_events,
+        total: pageviews + custom_events
+      }
+    end)
   end
 
   @spec features_usage(Teams.Team.t() | nil, list() | nil) :: [atom()]

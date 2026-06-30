@@ -1,4 +1,4 @@
-import { DashboardQuery, Filter } from '../query'
+import { DashboardState, Filter } from '../dashboard-state'
 import { cleanLabels, remapFromApiFilters } from '../util/filters'
 import { plainFilterText } from '../util/filter-text'
 import { AppNavigationTarget } from '../navigation/use-app-navigate'
@@ -9,6 +9,16 @@ export enum SegmentType {
   personal = 'personal',
   site = 'site'
 }
+
+/** keep in sync with Plausible.Segments */
+const ROLES_WITH_MAYBE_SITE_SEGMENTS = [Role.admin, Role.editor, Role.owner]
+const ROLES_WITH_PERSONAL_SEGMENTS = [
+  Role.billing,
+  Role.viewer,
+  Role.admin,
+  Role.editor,
+  Role.owner
+]
 
 /** This type signifies that the owner can't be shown. */
 type SegmentOwnershipHidden = { owner_id: null; owner_name: null }
@@ -24,9 +34,9 @@ export type SavedSegment = {
   id: number
   name: string
   type: SegmentType
-  /** datetime in site timezone, example 2025-02-26 10:00:00 */
+  /** naive site-timezone timestamp, example 2025-02-26T10:00:00 */
   inserted_at: string
-  /** datetime in site timezone, example 2025-02-26 10:00:00 */
+  /** naive site-timezone timestamp, example 2025-02-26T10:00:00 */
   updated_at: string
 } & SegmentOwnership
 
@@ -67,14 +77,14 @@ export function handleSegmentResponse(
 }
 
 export const getSegmentNamePlaceholder = (
-  query: Pick<DashboardQuery, 'labels' | 'filters'>
+  dashboardState: Pick<DashboardState, 'labels' | 'filters'>
 ) =>
-  query.filters
+  dashboardState.filters
     .reduce(
       (combinedName, filter) =>
         combinedName.length > 100
           ? combinedName
-          : `${combinedName}${combinedName.length ? ' and ' : ''}${plainFilterText(query, filter)}`,
+          : `${combinedName}${combinedName.length ? ' and ' : ''}${plainFilterText(dashboardState, filter)}`,
       ''
     )
     .slice(0, 255)
@@ -105,16 +115,44 @@ export const parseApiSegmentData = ({
   ...rest
 })
 
-export function getSearchToApplySingleSegmentFilter(
-  segment: Pick<SavedSegment, 'id' | 'name'>
+export function getSearchToRemoveSegmentFilter(): Required<AppNavigationTarget>['search'] {
+  return (searchRecord) => {
+    const updatedFilters = (
+      (Array.isArray(searchRecord.filters)
+        ? searchRecord.filters
+        : []) as Filter[]
+    ).filter((f) => !isSegmentFilter(f))
+    const currentLabels = searchRecord.labels ?? {}
+    return {
+      ...searchRecord,
+      filters: updatedFilters,
+      labels: cleanLabels(updatedFilters, currentLabels)
+    }
+  }
+}
+
+export function getSearchToSetSegmentFilter(
+  segment: Pick<SavedSegment, 'id' | 'name'>,
+  options: { omitAllOtherFilters?: boolean } = {}
 ): Required<AppNavigationTarget>['search'] {
-  return (search) => {
-    const filters = [['is', 'segment', [segment.id]]]
-    const labels = cleanLabels(filters, {}, 'segment', {
+  return (searchRecord) => {
+    const otherFilters = (
+      (Array.isArray(searchRecord.filters)
+        ? searchRecord.filters
+        : []) as Filter[]
+    ).filter((f) => !isSegmentFilter(f))
+    const currentLabels = searchRecord.labels ?? {}
+
+    const filters = [
+      ['is', 'segment', [segment.id]],
+      ...(options.omitAllOtherFilters ? [] : otherFilters)
+    ]
+
+    const labels = cleanLabels(filters, currentLabels, 'segment', {
       [formatSegmentIdAsLabelKey(segment.id)]: segment.name
     })
     return {
-      ...search,
+      ...searchRecord,
       filters,
       labels
     }
@@ -150,6 +188,42 @@ export function resolveFilters(
   })
 }
 
+export const canSeeSaveAsSegmentAction = ({
+  user
+}: {
+  user: UserContextValue
+}) =>
+  user.loggedIn &&
+  (ROLES_WITH_MAYBE_SITE_SEGMENTS.includes(user.role) ||
+    ROLES_WITH_PERSONAL_SEGMENTS.includes(user.role))
+
+export function canExpandSegment({
+  segment,
+  user
+}: {
+  segment: Pick<SavedSegment, 'id' | 'owner_id' | 'type'>
+  user: UserContextValue
+}) {
+  if (
+    segment.type === SegmentType.site &&
+    user.loggedIn &&
+    ROLES_WITH_MAYBE_SITE_SEGMENTS.includes(user.role)
+  ) {
+    return true
+  }
+
+  if (
+    segment.type === SegmentType.personal &&
+    user.loggedIn &&
+    ROLES_WITH_PERSONAL_SEGMENTS.includes(user.role) &&
+    user.id === segment.owner_id
+  ) {
+    return true
+  }
+
+  return false
+}
+
 export function isListableSegment({
   segment,
   site,
@@ -177,6 +251,19 @@ export function isListableSegment({
 
 export function canSeeSegmentDetails({ user }: { user: UserContextValue }) {
   return user.loggedIn && user.role !== Role.public
+}
+
+export function canRemoveFilter(
+  filter: Filter,
+  limitedToSegment: Pick<SavedSegment, 'id' | 'name'> | null
+) {
+  if (isSegmentFilter(filter) && limitedToSegment) {
+    const [_operation, _dimension, clauses] = filter
+    return (
+      clauses.length === 1 && String(limitedToSegment.id) === String(clauses[1])
+    )
+  }
+  return true
 }
 
 export function findAppliedSegmentFilter({ filters }: { filters: Filter[] }) {

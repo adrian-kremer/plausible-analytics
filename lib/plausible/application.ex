@@ -31,11 +31,13 @@ defmodule Plausible.Application do
     children =
       [
         cluster,
+        Plausible.InternalStatsApiVersion,
         {PartitionSupervisor,
          child_spec: Task.Supervisor, name: Plausible.UserAgentParseTaskSupervisor},
         Plausible.Session.BalancerSupervisor,
         Plausible.PromEx,
         {Plausible.Auth.TOTP.Vault, key: totp_vault_key()},
+        {Plausible.Auth.TOTP.FallbackVault, key: totp_fallback_vault_key()},
         Plausible.Repo,
         Plausible.ClickhouseRepo,
         Plausible.IngestRepo,
@@ -151,7 +153,7 @@ defmodule Plausible.Application do
             adapter_opts: [
               n_lock_partitions: 1,
               ttl_check_interval: false,
-              read_concurrency: true
+              ets_options: [read_concurrency: true]
             ],
             warmers: [
               refresh_all:
@@ -160,20 +162,38 @@ defmodule Plausible.Application do
             ]
           )
         end,
-        warmed_cache(PlausibleWeb.TrackerScriptCache,
-          adapter_opts: [
-            n_lock_partitions: 1,
-            ttl_check_interval: false,
-            ets_options: [:bag, read_concurrency: true]
-          ],
-          warmers: [
-            refresh_all:
-              {PlausibleWeb.TrackerScriptCache.All,
-               interval: :timer.minutes(180) + Enum.random(1..:timer.seconds(10))},
-            refresh_updated_recently:
-              {PlausibleWeb.TrackerScriptCache.RecentlyUpdated, interval: :timer.seconds(30)}
-          ]
-        ),
+        on_ee do
+          warmed_cache(Plausible.Site.TrackerScriptIdCache,
+            adapter_opts: [
+              n_lock_partitions: 1,
+              ttl_check_interval: false,
+              ets_options: [read_concurrency: true]
+            ],
+            warmers: [
+              refresh_all:
+                {Plausible.Site.TrackerScriptIdCache.All,
+                 interval: :timer.minutes(180) + Enum.random(1..:timer.seconds(10))},
+              refresh_updated_recently:
+                {Plausible.Site.TrackerScriptIdCache.RecentlyUpdated,
+                 interval: :timer.seconds(30)}
+            ]
+          )
+        else
+          warmed_cache(Plausible.Site.TrackerScriptCache,
+            adapter_opts: [
+              n_lock_partitions: 1,
+              ttl_check_interval: false,
+              ets_options: [read_concurrency: true]
+            ],
+            warmers: [
+              refresh_all:
+                {Plausible.Site.TrackerScriptCache.All,
+                 interval: :timer.minutes(180) + Enum.random(1..:timer.seconds(10))},
+              refresh_updated_recently:
+                {Plausible.Site.TrackerScriptCache.RecentlyUpdated, interval: :timer.seconds(30)}
+            ]
+          )
+        end,
         Plausible.Ingestion.Counters,
         Plausible.Session.Salts,
         Supervisor.child_spec(Plausible.Event.WriteBuffer, id: Plausible.Event.WriteBuffer),
@@ -226,6 +246,12 @@ defmodule Plausible.Application do
     :plausible
     |> Application.fetch_env!(Plausible.Auth.TOTP)
     |> Keyword.fetch!(:vault_key)
+  end
+
+  defp totp_fallback_vault_key() do
+    :plausible
+    |> Application.fetch_env!(Plausible.Auth.TOTP)
+    |> Keyword.fetch!(:fallback_vault_key)
   end
 
   defp finch_pool_config() do
@@ -295,36 +321,32 @@ defmodule Plausible.Application do
   defp maybe_add_paddle_pool(pool_config, default) do
     paddle_conf = Application.get_env(:plausible, :paddle)
 
-    cond do
-      paddle_conf[:vendor_id] && paddle_conf[:vendor_auth_code] ->
-        Map.put(
-          pool_config,
-          Plausible.Billing.PaddleApi.vendors_domain(),
-          Config.Reader.merge(default, conn_opts: [transport_opts: [timeout: 15_000]])
-        )
-
-      true ->
-        pool_config
+    if paddle_conf[:vendor_id] && paddle_conf[:vendor_auth_code] do
+      Map.put(
+        pool_config,
+        Plausible.Billing.PaddleApi.vendors_domain(),
+        Config.Reader.merge(default, conn_opts: [transport_opts: [timeout: 15_000]])
+      )
+    else
+      pool_config
     end
   end
 
   defp maybe_add_google_pools(pool_config, default) do
     google_conf = Application.get_env(:plausible, :google)
 
-    cond do
-      google_conf[:client_id] && google_conf[:client_secret] ->
-        pool_config
-        |> Map.put(
-          google_conf[:api_url],
-          Config.Reader.merge(default, conn_opts: [transport_opts: [timeout: 15_000]])
-        )
-        |> Map.put(
-          google_conf[:reporting_api_url],
-          Config.Reader.merge(default, conn_opts: [transport_opts: [timeout: 15_000]])
-        )
-
-      true ->
-        pool_config
+    if google_conf[:client_id] && google_conf[:client_secret] do
+      pool_config
+      |> Map.put(
+        google_conf[:api_url],
+        Config.Reader.merge(default, conn_opts: [transport_opts: [timeout: 15_000]])
+      )
+      |> Map.put(
+        google_conf[:reporting_api_url],
+        Config.Reader.merge(default, conn_opts: [transport_opts: [timeout: 15_000]])
+      )
+    else
+      pool_config
     end
   end
 
@@ -349,10 +371,16 @@ defmodule Plausible.Application do
   end
 
   defp setup_opentelemetry() do
-    OpentelemetryPhoenix.setup()
-    OpentelemetryEcto.setup([:plausible, :repo])
-    OpentelemetryEcto.setup([:plausible, :clickhouse_repo])
+    :opentelemetry_cowboy.setup()
+    OpentelemetryPhoenix.setup(adapter: :cowboy2)
+    OpentelemetryEcto.setup([:plausible, :repo], db_statement: :enabled)
+    OpentelemetryEcto.setup([:plausible, :clickhouse_repo], db_statement: :enabled)
     OpentelemetryOban.setup()
+    Plausible.OpenTelemetry.Logger.setup()
+
+    if Application.get_env(:opentelemetry_experimental, :readers, []) != [] do
+      Plausible.OpenTelemetry.BeamMetrics.setup()
+    end
   end
 
   defp setup_geolocation do

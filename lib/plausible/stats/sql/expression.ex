@@ -12,7 +12,7 @@ defmodule Plausible.Stats.SQL.Expression do
 
   import Ecto.Query
 
-  alias Plausible.Stats.{Query, Filters, SQL}
+  alias Plausible.Stats.{Query, Filters, SQL, Time}
 
   @no_ref "Direct / None"
   @no_channel "Direct"
@@ -27,22 +27,58 @@ defmodule Plausible.Stats.SQL.Expression do
     end
   end
 
-  defmacrop time_slots(query, period_in_seconds) do
+  defmacrop time_slots(query, period_in_seconds, first, last) do
     quote do
       fragment(
-        "timeSlots(toTimeZone(?, ?), toUInt32(timeDiff(?, ?)), toUInt32(?))",
+        """
+        timeSlots(
+          toTimeZone(greatest(?, ?), ?),
+          toUInt32(timeDiff(greatest(?, ?), least(?, ?))),
+          toUInt32(?)
+        )
+        """,
         s.start,
+        ^unquote(first),
         ^unquote(query).timezone,
         s.start,
+        ^unquote(first),
         s.timestamp,
+        ^unquote(last),
         ^unquote(period_in_seconds)
       )
     end
   end
 
+  def select_dimension(q, key, "time:month", :sessions, query) do
+    {_first, last_datetime} = Time.utc_boundaries(query)
+
+    select_merge_as(q, [t], %{
+      key =>
+        fragment(
+          "toStartOfMonth(toTimeZone(least(?, ?), ?))",
+          t.timestamp,
+          ^last_datetime,
+          ^query.timezone
+        )
+    })
+  end
+
   def select_dimension(q, key, "time:month", _table, query) do
     select_merge_as(q, [t], %{
       key => fragment("toStartOfMonth(toTimeZone(?, ?))", t.timestamp, ^query.timezone)
+    })
+  end
+
+  def select_dimension(q, key, "time:week", :sessions, query) do
+    {_first, last_datetime} = Time.utc_boundaries(query)
+    date_range = Query.date_range(query)
+
+    select_merge_as(q, [t], %{
+      key =>
+        weekstart_not_before(
+          to_timezone(fragment("least(?, ?)", t.timestamp, ^last_datetime), ^query.timezone),
+          ^date_range.first
+        )
     })
   end
 
@@ -58,6 +94,20 @@ defmodule Plausible.Stats.SQL.Expression do
     })
   end
 
+  def select_dimension(q, key, "time:day", :sessions, query) do
+    {_first, last_datetime} = Time.utc_boundaries(query)
+
+    select_merge_as(q, [t], %{
+      key =>
+        fragment(
+          "toDate(toTimeZone(least(?, ?), ?))",
+          t.timestamp,
+          ^last_datetime,
+          ^query.timezone
+        )
+    })
+  end
+
   def select_dimension(q, key, "time:day", _table, query) do
     select_merge_as(q, [t], %{
       key => fragment("toDate(toTimeZone(?, ?))", t.timestamp, ^query.timezone)
@@ -69,8 +119,10 @@ defmodule Plausible.Stats.SQL.Expression do
     #   timezone-aware. This means that for e.g. Asia/Katmandu (GMT+5:45)
     #   to work, we divide time into 15-minute buckets and later combine these
     #   via toStartOfHour
+    {first, last} = Time.utc_boundaries(query)
+
     q
-    |> join(:inner, [s], time_slot in time_slots(query, 15 * 60),
+    |> join(:inner, [s], time_slot in time_slots(query, 15 * 60, first, last),
       as: :time_slot,
       hints: "ARRAY",
       on: true
@@ -89,8 +141,10 @@ defmodule Plausible.Stats.SQL.Expression do
   # :NOTE: This is not exposed in Query APIv2
   def select_dimension(q, key, "time:minute", :sessions, query)
       when query.smear_session_metrics do
+    {first, last} = Time.utc_boundaries(query)
+
     q
-    |> join(:inner, [s], time_slot in time_slots(query, 60),
+    |> join(:inner, [s], time_slot in time_slots(query, 60, first, last),
       as: :time_slot,
       hints: "ARRAY",
       on: true
@@ -130,8 +184,14 @@ defmodule Plausible.Stats.SQL.Expression do
   def select_dimension(q, key, "visit:entry_page", _table, _query),
     do: select_merge_as(q, [t], %{key => t.entry_page})
 
+  def select_dimension(q, key, "visit:entry_page_hostname", _table, _query),
+    do: select_merge_as(q, [t], %{key => t.hostname})
+
   def select_dimension(q, key, "visit:exit_page", _table, _query),
     do: select_merge_as(q, [t], %{key => t.exit_page})
+
+  def select_dimension(q, key, "visit:exit_page_hostname", _table, _query),
+    do: select_merge_as(q, [t], %{key => t.exit_page_hostname})
 
   def select_dimension(q, key, "visit:utm_medium", _table, _query),
     do: field_or_blank_value(q, key, t.utm_medium, @not_set)
@@ -204,7 +264,7 @@ defmodule Plausible.Stats.SQL.Expression do
 
   def select_dimension_internal(q, "visit:exit_page") do
     # As exit page changes with every pageview event over the lifetime
-    # of a session, only the most recent value must be considered. 
+    # of a session, only the most recent value must be considered.
     select_merge_as(q, [t], %{
       exit_page: fragment("argMax(?, ?)", field(t, :exit_page), field(t, :events))
     })
@@ -272,8 +332,7 @@ defmodule Plausible.Stats.SQL.Expression do
       wrap_alias(
         [e],
         %{
-          average_revenue:
-            fragment("toDecimal64(avg(?) * any(_sample_factor), 3)", e.revenue_reporting_amount)
+          average_revenue: fragment("toDecimal64(avg(?), 3)", e.revenue_reporting_amount)
         }
       )
     end
@@ -444,6 +503,15 @@ defmodule Plausible.Stats.SQL.Expression do
   def session_metric(:conversion_rate, _query), do: %{}
   def session_metric(:group_conversion_rate, _query), do: %{}
 
+  @doc """
+  The fragment matches events to goals by:
+  1. Checking if the pathname matches the goal's page regex pattern
+  2. Verifying the event name matches the expected name for the goal type
+  3. Validating scroll depth is within threshold (for scroll goals)
+  4. Ensuring all custom properties match (if any are defined on the goal)
+
+  Returns an array of goal indices that the event matches.
+  """
   defmacro event_goal_join(goal_join_data) do
     quote do
       fragment(
@@ -451,7 +519,51 @@ defmodule Plausible.Stats.SQL.Expression do
         arrayIntersect(
           multiMatchAllIndices(?, ?),
           arrayMap(
-            (expected_name, threshold, index) -> if(expected_name = ? and ? between threshold and 100, index, -1),
+            (expected_name, threshold, index, custom_props_keys, custom_props_values) -> if(
+              expected_name = ? and ? between threshold and 100 and
+              (empty(custom_props_keys) OR arrayAll((k, v) -> ?[indexOf(?, k)] = v, custom_props_keys, custom_props_values)),
+              index, -1
+            ),
+            ?,
+            ?,
+            ?,
+            ?,
+            ?
+          )
+        )
+        """,
+        e.pathname,
+        type(^unquote(goal_join_data).page_regexes, {:array, :string}),
+        e.name,
+        e.scroll_depth,
+        field(e, :"meta.value"),
+        field(e, :"meta.key"),
+        type(^unquote(goal_join_data).event_names_by_type, {:array, :string}),
+        type(^unquote(goal_join_data).scroll_thresholds, {:array, :integer}),
+        type(^unquote(goal_join_data).indices, {:array, :integer}),
+        type(^unquote(goal_join_data).custom_props_keys, {:array, {:array, :string}}),
+        type(^unquote(goal_join_data).custom_props_values, {:array, {:array, :string}})
+      )
+    end
+  end
+
+  @doc """
+  Optimized variant of `event_goal_join/1` for use when no goals have custom
+  property filters. Omits all references to `meta.key` and `meta.value`,
+  preventing ClickHouse from reading those expensive Array(String) columns at
+  scan time.
+  """
+  defmacro event_goal_join_no_props(goal_join_data) do
+    quote do
+      fragment(
+        """
+        arrayIntersect(
+          multiMatchAllIndices(?, ?),
+          arrayMap(
+            (expected_name, threshold, index) -> if(
+              expected_name = ? and ? between threshold and 100,
+              index, -1
+            ),
             ?,
             ?,
             ?

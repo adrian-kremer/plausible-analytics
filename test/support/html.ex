@@ -10,10 +10,15 @@ defmodule Plausible.Test.Support.HTML do
     |> Kernel.not()
   end
 
+  def find(%LazyHTML{} = html, selector) do
+    html
+    |> LazyHTML.query(selector)
+  end
+
   def find(html, selector) do
     html
     |> lazy_parse()
-    |> LazyHTML.query(selector)
+    |> find(selector)
   end
 
   def submit_button(html, form) do
@@ -79,26 +84,6 @@ defmodule Plausible.Test.Support.HTML do
 
   def name_of(element) do
     text_of_attr(element, "name")
-  end
-
-  @doc """
-    When using liveview <.portal> element, it renders a <template> that gets rendered into DOM
-    by JS. In order to make assertions about portal contents, we need to find the <template> element
-    and get its contents. Unfortunately <template> elements are not treated like standard elements by LazyHTML.
-    Functions like LazyHTML.text() or LazyHTML.query() return nothing for <template> elements. So this function tricks LazyHTML by:
-      1. Finding the template element
-      2. Transforming it into a <div> so it can be used like a normal LazyHTML node
-  )
-  """
-  def find_portal_template(html, id) do
-    template_id = id <> "-portal"
-
-    [{"template", attrs, children}] =
-      lazy_parse(html)
-      |> find(template_id)
-      |> LazyHTML.to_tree()
-
-    LazyHTML.from_tree([{"div", attrs, children}])
   end
 
   defp lazy_parse(%LazyHTML{} = lazy) do

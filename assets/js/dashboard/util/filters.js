@@ -1,4 +1,3 @@
-import * as api from '../api'
 import { formatSegmentIdAsLabelKey } from '../filtering/segments'
 
 export const FILTER_MODAL_TO_FILTER_GROUP = {
@@ -86,8 +85,8 @@ export function getPropertyKeyFromFilterKey(filterKey) {
   return filterKey.slice(EVENT_PROPS_PREFIX.length)
 }
 
-export function getFiltersByKeyPrefix(query, prefix) {
-  return query.filters.filter(hasDimensionPrefix(prefix))
+export function getFiltersByKeyPrefix(dashboardState, prefix) {
+  return dashboardState.filters.filter(hasDimensionPrefix(prefix))
 }
 
 const hasDimensionPrefix =
@@ -95,18 +94,24 @@ const hasDimensionPrefix =
   ([_operation, dimension, _clauses]) =>
     dimension.startsWith(prefix)
 
-function omitFiltersByKeyPrefix(query, prefix) {
-  return query.filters.filter(
+export function omitFiltersByKeyPrefix(dashboardState, prefix) {
+  return dashboardState.filters.filter(
     ([_operation, filterKey, _clauses]) => !filterKey.startsWith(prefix)
   )
 }
 
-export function replaceFilterByPrefix(query, prefix, filter) {
-  return omitFiltersByKeyPrefix(query, prefix).concat([filter])
+export function replaceFilterByPrefix(dashboardState, prefix, filter) {
+  return omitFiltersByKeyPrefix(dashboardState, prefix).concat([filter])
 }
 
-export function isFilteringOnFixedValue(query, filterKey, expectedValue) {
-  const filters = query.filters.filter(([_operation, key]) => filterKey == key)
+export function isFilteringOnFixedValue(
+  dashboardState,
+  filterKey,
+  expectedValue
+) {
+  const filters = dashboardState.filters.filter(
+    ([_operation, key]) => filterKey == key
+  )
   if (filters.length == 1) {
     const [operation, _filterKey, clauses] = filters[0]
     return (
@@ -118,8 +123,12 @@ export function isFilteringOnFixedValue(query, filterKey, expectedValue) {
   return false
 }
 
-export function hasConversionGoalFilter(query) {
-  const resolvedGoalFilters = query.resolvedFilters.filter(
+export function hasPageFilter(dashboardState) {
+  return dashboardState.resolvedFilters.some(hasDimensionPrefix('page'))
+}
+
+export function hasConversionGoalFilter(dashboardState) {
+  const resolvedGoalFilters = dashboardState.resolvedFilters.filter(
     hasDimensionPrefix('goal')
   )
 
@@ -128,13 +137,13 @@ export function hasConversionGoalFilter(query) {
   })
 }
 
-export function isRealTimeDashboard(query) {
-  return query?.period === 'realtime'
+export function isRealTimeDashboard(dashboardState) {
+  return dashboardState?.period === 'realtime'
 }
 
 // Note: Currently only a single goal filter can be applied at a time.
-export function getGoalFilter(query) {
-  return getFiltersByKeyPrefix(query, 'goal')[0] || null
+export function getGoalFilter(dashboardState) {
+  return getFiltersByKeyPrefix(dashboardState, 'goal')[0] || null
 }
 
 export function formatFilterGroup(filterGroup) {
@@ -189,14 +198,23 @@ const EVENT_FILTER_KEYS = new Set(['name', 'page', 'goal', 'hostname'])
 const EVENT_PREFIX = 'event:'
 const VISIT_PREFIX = 'visit:'
 
+export function hasEventFilters(dashboardState) {
+  return dashboardState.resolvedFilters.some(
+    ([_operation, filterKey, _clauses]) => isEventFilterKey(filterKey)
+  )
+}
+
+function isEventFilterKey(filterKey) {
+  return (
+    EVENT_FILTER_KEYS.has(filterKey) || filterKey.startsWith(EVENT_PROPS_PREFIX)
+  )
+}
+
 function remapFilterKey(filterKey) {
   if (NO_PREFIX_KEYS.has(filterKey)) {
     return filterKey
   }
-  if (
-    EVENT_FILTER_KEYS.has(filterKey) ||
-    filterKey.startsWith(EVENT_PROPS_PREFIX)
-  ) {
+  if (isEventFilterKey(filterKey)) {
     return `${EVENT_PREFIX}${filterKey}`
   }
   return `${VISIT_PREFIX}${filterKey}`
@@ -260,26 +278,6 @@ function remapToApiFilter([operation, filterKey, clauses, ...modifiers]) {
   }
 }
 
-export function fetchSuggestions(apiPath, query, input, additionalFilter) {
-  const updatedQuery = queryForSuggestions(query, additionalFilter)
-  return api.get(apiPath, updatedQuery, { q: input.trim() })
-}
-
-function queryForSuggestions(query, additionalFilter) {
-  let filters = query.filters
-  if (additionalFilter) {
-    const [_operation, filterKey, clauses] = additionalFilter
-
-    // For suggestions, we remove already-applied filter with same key from query and add new filter (if feasible)
-    if (clauses.length > 0) {
-      filters = replaceFilterByPrefix(query, filterKey, additionalFilter)
-    } else {
-      filters = omitFiltersByKeyPrefix(query, filterKey)
-    }
-  }
-  return { ...query, filters }
-}
-
 export function getFilterGroup([_operation, filterKey, _clauses]) {
   return filterKey.startsWith(EVENT_PROPS_PREFIX) ? 'props' : filterKey
 }
@@ -291,23 +289,23 @@ export const formattedFilters = {
   prop_value: 'Value',
   source: 'Source',
   channel: 'Channel',
-  utm_medium: 'UTM Medium',
-  utm_source: 'UTM Source',
-  utm_campaign: 'UTM Campaign',
-  utm_content: 'UTM Content',
-  utm_term: 'UTM Term',
+  utm_medium: 'UTM medium',
+  utm_source: 'UTM source',
+  utm_campaign: 'UTM campaign',
+  utm_content: 'UTM content',
+  utm_term: 'UTM term',
   referrer: 'Referrer URL',
   screen: 'Screen size',
   browser: 'Browser',
-  browser_version: 'Browser Version',
-  os: 'Operating System',
-  os_version: 'Operating System Version',
+  browser_version: 'Browser version',
+  os: 'Operating system',
+  os_version: 'Operating system version',
   country: 'Country',
   region: 'Region',
   city: 'City',
   page: 'Page',
   hostname: 'Hostname',
-  entry_page: 'Entry Page',
-  exit_page: 'Exit Page',
+  entry_page: 'Entry page',
+  exit_page: 'Exit page',
   segment: 'Segment'
 }

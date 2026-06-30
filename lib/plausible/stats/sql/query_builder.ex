@@ -36,6 +36,7 @@ defmodule Plausible.Stats.SQL.QueryBuilder do
       from(
         e in "events_v2",
         where: ^SQL.WhereBuilder.build(:events, events_query),
+        where: ^SQL.WhereBuilder.derived_name_filter(events_query),
         select: ^select_event_metrics(events_query)
       )
 
@@ -83,8 +84,8 @@ defmodule Plausible.Stats.SQL.QueryBuilder do
           group_by: s.session_id
         )
 
-      # The session-only dimension columns are explicitly selected in joined 
-      # sessions table. This enables combining session-only dimensions (entry 
+      # The session-only dimension columns are explicitly selected in joined
+      # sessions table. This enables combining session-only dimensions (entry
       # and exit pages) with event-only metrics, like revenue.
       sessions_q =
         Enum.reduce(dimensions, sessions_q, fn dimension, acc ->
@@ -110,6 +111,7 @@ defmodule Plausible.Stats.SQL.QueryBuilder do
       events_q =
         from(e in "events_v2",
           where: ^SQL.WhereBuilder.build(:events, query),
+          where: ^SQL.WhereBuilder.derived_name_filter(query),
           select: %{
             session_id: fragment("DISTINCT ?", e.session_id),
             _sample_factor: fragment("_sample_factor")
@@ -168,18 +170,40 @@ defmodule Plausible.Stats.SQL.QueryBuilder do
     |> group_by([], selected_as(^key))
   end
 
+  defp dimension_group_by(q, :events, query, "event:prop_key" = dimension) do
+    from(e in q,
+      join: meta in fragment("meta"),
+      hints: "ARRAY",
+      on: true,
+      group_by: meta.key
+    )
+    |> select_merge_as([_e, meta], %{shortname(query, dimension) => meta.key})
+  end
+
   defp dimension_group_by(q, :events, query, "event:goal" = dimension) do
     goal_join_data = Plausible.Stats.Goals.goal_join_data(query)
 
-    from(e in q,
-      join: goal in Expression.event_goal_join(goal_join_data),
-      hints: "ARRAY",
-      on: true,
-      select_merge: %{
-        ^shortname(query, dimension) => fragment("?", goal)
-      },
-      group_by: goal
-    )
+    if Enum.all?(goal_join_data.custom_props_keys, &Enum.empty?/1) do
+      from(e in q,
+        join: goal in Expression.event_goal_join_no_props(goal_join_data),
+        hints: "ARRAY",
+        on: true,
+        select_merge: %{
+          ^shortname(query, dimension) => fragment("?", goal)
+        },
+        group_by: goal
+      )
+    else
+      from(e in q,
+        join: goal in Expression.event_goal_join(goal_join_data),
+        hints: "ARRAY",
+        on: true,
+        select_merge: %{
+          ^shortname(query, dimension) => fragment("?", goal)
+        },
+        group_by: goal
+      )
+    end
   end
 
   defp dimension_group_by(q, table, query, dimension) do

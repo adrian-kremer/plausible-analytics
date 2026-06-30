@@ -7,16 +7,17 @@ import Combobox from '../../components/combobox'
 
 import {
   FILTER_OPERATIONS,
-  fetchSuggestions,
   isFreeChoiceFilterOperation,
   getLabel,
   formattedFilters
 } from '../../util/filters'
+import { fetchSuggestions } from '../../util/fetch-suggestions'
 import { apiPath } from '../../util/url'
-import { useQueryContext } from '../../query-context'
+import { useDashboardStateContext } from '../../dashboard-state-context'
 import { useSiteContext } from '../../site-context'
 
 export default function FilterModalRow({
+  testId,
   filter,
   labels,
   canDelete,
@@ -24,7 +25,7 @@ export default function FilterModalRow({
   onUpdate,
   onDelete
 }) {
-  const { query } = useQueryContext()
+  const { dashboardState } = useDashboardStateContext()
   const site = useSiteContext()
   const [operation, filterKey, clauses] = filter
 
@@ -64,7 +65,7 @@ export default function FilterModalRow({
 
     return fetchSuggestions(
       apiPath(site, `/suggestions/${filterKey}`),
-      query,
+      dashboardState,
       input,
       additionalFilter
     )
@@ -72,6 +73,7 @@ export default function FilterModalRow({
 
   return (
     <div
+      data-testid={`filter-row-${testId}`}
       className={classNames('grid mt-1', {
         'grid-cols-12': canDelete,
         'grid-cols-11': !canDelete

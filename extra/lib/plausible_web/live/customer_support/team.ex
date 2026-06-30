@@ -25,10 +25,13 @@ defmodule PlausibleWeb.Live.CustomerSupport.Team do
     team = Resource.Team.get(team_id)
 
     if team do
+      tab_params = Map.drop(params, ["id", "tab"])
+
       socket =
         socket
         |> assign(:team, team)
         |> assign(:tab, tab)
+        |> assign(:tab_params, tab_params)
 
       {:noreply, go_to_tab(socket, tab, params, :team, tab_component(tab))}
     else
@@ -85,6 +88,7 @@ defmodule PlausibleWeb.Live.CustomerSupport.Team do
         module={tab_component(@tab)}
         team={@team}
         tab={@tab}
+        tab_params={@tab_params}
         id={"team-#{@team.id}-#{@tab}"}
       />
     </Layout.layout>
@@ -273,7 +277,9 @@ defmodule PlausibleWeb.Live.CustomerSupport.Team do
     cond do
       team && team.subscription ->
         status_str =
-          PlausibleWeb.SettingsView.present_subscription_status(team.subscription.status)
+          PlausibleWeb.Components.Billing.Helpers.present_subscription_status(
+            team.subscription.status
+          )
 
         if team.subscription.paddle_subscription_id do
           assigns = %{status_str: status_str, subscription: team.subscription}

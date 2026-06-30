@@ -20,7 +20,7 @@ config :esbuild,
   version: "0.17.11",
   default: [
     args:
-      ~w(js/app.js js/storybook.js js/dashboard.tsx js/embed.host.js js/embed.content.js --bundle --target=es2017 --loader:.js=jsx --outdir=../priv/static/js --define:BUILD_EXTRA=true),
+      ~w(js/app.js js/dashboard.tsx js/embed.host.js js/embed.content.js --bundle --target=es2017 --loader:.js=jsx --outdir=../priv/static/js --define:BUILD_EXTRA=true),
     cd: Path.expand("../assets", __DIR__),
     env: %{"NODE_PATH" => Path.expand("../deps", __DIR__)}
   ]
@@ -33,18 +33,11 @@ config :tailwind,
       --output=priv/static/css/app.css
     ),
     cd: Path.expand("..", __DIR__)
-  ],
-  storybook: [
-    args: ~w(
-    --input=assets/css/storybook.css
-    --output=priv/static/css/storybook.css
-  ),
-    cd: Path.expand("..", __DIR__)
   ]
 
 config :ua_inspector,
   database_path: "priv/ua_inspector",
-  remote_release: "6.3.2"
+  remote_release: "6.5.0"
 
 config :ref_inspector,
   database_path: "priv/ref_inspector"
@@ -87,5 +80,10 @@ config :sentry,
 
 config :prom_ex, :storage_adapter, Plausible.PromEx.StripedPeep
 config :peep, :bucket_calculator, Plausible.PromEx.Buckets
+
+config :plausible, Plausible.Auth.ApiKey,
+  legacy_per_user_hourly_request_limit: 600,
+  burst_request_limit: 60,
+  burst_period_seconds: 10
 
 import_config "#{config_env()}.exs"

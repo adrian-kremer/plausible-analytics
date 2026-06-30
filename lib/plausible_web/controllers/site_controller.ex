@@ -80,14 +80,20 @@ defmodule PlausibleWeb.SiteController do
         )
 
       {:error, _, changeset, _} ->
-        render(conn, "new.html",
-          changeset: changeset,
-          first_site?: first_site?,
-          site_limit: Plausible.Teams.Billing.site_limit(team),
-          site_limit_exceeded?: false,
-          flow: flow,
-          form_submit_url: "/sites?flow=#{flow}"
-        )
+        case check_can_already_access(changeset, user) do
+          {:ok, domain} ->
+            redirect(conn, to: Routes.stats_path(PlausibleWeb.Endpoint, :stats, domain, []))
+
+          {:error, :no_access} ->
+            render(conn, "new.html",
+              changeset: changeset,
+              first_site?: first_site?,
+              site_limit: Plausible.Teams.Billing.site_limit(team),
+              site_limit_exceeded?: false,
+              flow: flow,
+              form_submit_url: "/sites?flow=#{flow}"
+            )
+        end
     end
   end
 
@@ -186,6 +192,7 @@ defmodule PlausibleWeb.SiteController do
     conn
     |> render("settings_danger_zone.html",
       site: site,
+      connect_live_socket: true,
       dogfood_page_path: "/:dashboard/settings/danger-zone",
       layout: {PlausibleWeb.LayoutView, "site_settings.html"}
     )
@@ -631,5 +638,25 @@ defmodule PlausibleWeb.SiteController do
       other ->
         other
     end
+  end
+
+  defp check_can_already_access(changeset, user) do
+    domain = Ecto.Changeset.get_change(changeset, :domain)
+
+    with true <- domain_taken_error?(changeset),
+         site = Sites.get_by_domain(domain),
+         true <- not is_nil(site),
+         true <- Plausible.Teams.Memberships.has_editor_access?(site, user) do
+      {:ok, domain}
+    else
+      false -> {:error, :no_access}
+    end
+  end
+
+  defp domain_taken_error?(changeset) do
+    Enum.any?(changeset.errors, fn
+      {:domain, {_, [constraint: :unique, constraint_name: "sites_domain_index"]}} -> true
+      _ -> false
+    end)
   end
 end

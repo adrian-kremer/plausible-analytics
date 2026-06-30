@@ -4,12 +4,14 @@ defmodule PlausibleWeb.Components.Generic do
   """
   use Phoenix.Component, global_prefixes: ~w(x-)
 
+  import PlausibleWeb.Components.Icons
+
   @notice_themes %{
     gray: %{
       bg: "bg-gray-100 dark:bg-gray-800",
       icon: "text-gray-600 dark:text-gray-300",
       title_text: "text-sm text-gray-900 dark:text-gray-100",
-      body_text: "text-sm text-gray-600 dark:text-gray-300 leading-5"
+      body_text: "text-sm text-gray-800 dark:text-gray-200 leading-5"
     },
     yellow: %{
       bg: "bg-yellow-100/60 dark:bg-yellow-900/40",
@@ -22,24 +24,37 @@ defmodule PlausibleWeb.Components.Generic do
       icon: "text-red-600 dark:text-red-500",
       title_text: "text-sm text-gray-900 dark:text-gray-100",
       body_text: "text-sm text-gray-600 dark:text-gray-100/60 leading-5"
+    },
+    white: %{
+      bg: "bg-white dark:bg-gray-900 shadow-sm dark:shadow-none",
+      icon: "text-gray-600 dark:text-gray-400",
+      title_text: "text-sm text-gray-900 dark:text-gray-100",
+      body_text: "text-sm text-gray-600 dark:text-gray-300 leading-5"
     }
   }
 
+  # Themes/sizes/base are defined as component classes in
+  # assets/css/app.css and mirrored by the React `Button` component in
+  # assets/js/dashboard/components/button.tsx. Update there only.
   @button_themes %{
-    "primary" =>
-      "bg-indigo-600 text-white hover:bg-indigo-700 focus-visible:outline-indigo-600 disabled:bg-indigo-400/60 disabled:dark:bg-indigo-600/30 disabled:dark:text-white/35",
-    "secondary" =>
-      "border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 hover:text-gray-900 hover:shadow-sm dark:hover:bg-gray-600 dark:hover:text-white disabled:text-gray-700/40 disabled:hover:shadow-none dark:disabled:text-gray-500 dark:disabled:bg-gray-800 dark:disabled:border-gray-800",
-    "yellow" =>
-      "bg-yellow-600/90 text-white hover:bg-yellow-600 focus-visible:outline-yellow-600 disabled:bg-yellow-400/60 disabled:dark:bg-yellow-600/30 disabled:dark:text-white/35",
-    "danger" =>
-      "border border-gray-300 dark:border-gray-800 text-red-600 bg-white dark:bg-gray-800 hover:text-red-700 hover:shadow-sm dark:hover:text-red-400 dark:text-red-500 active:text-red-800 disabled:text-red-700/40 disabled:hover:shadow-none dark:disabled:text-red-500/35 dark:disabled:bg-gray-800"
+    "primary" => "btn-theme-primary",
+    "secondary" => "btn-theme-secondary",
+    "yellow" => "btn-theme-yellow",
+    "danger" => "btn-theme-danger",
+    "ghost" => "btn-theme-ghost",
+    "icon" => "btn-theme-icon"
   }
 
-  @button_base_class "whitespace-nowrap truncate inline-flex items-center justify-center gap-x-2 font-medium rounded-md px-3.5 py-2.5 text-sm transition-all duration-150 cursor-pointer disabled:cursor-not-allowed"
+  @button_base_class "btn-base"
+
+  @button_sizes %{
+    "sm" => "btn-sm",
+    "md" => "btn-md"
+  }
 
   attr(:type, :string, default: "button")
   attr(:theme, :string, default: "primary")
+  attr(:size, :string, default: "md")
   attr(:class, :string, default: "")
   attr(:disabled, :boolean, default: false)
   attr(:mt?, :boolean, default: true)
@@ -51,7 +66,8 @@ defmodule PlausibleWeb.Components.Generic do
     assigns =
       assign(assigns,
         button_base_class: @button_base_class,
-        theme_class: @button_themes[assigns.theme]
+        theme_class: @button_themes[assigns.theme],
+        size_class: @button_sizes[assigns.size]
       )
 
     ~H"""
@@ -61,6 +77,7 @@ defmodule PlausibleWeb.Components.Generic do
       class={[
         @mt? && "mt-6",
         @button_base_class,
+        @size_class,
         @theme_class,
         @class
       ]}
@@ -74,6 +91,7 @@ defmodule PlausibleWeb.Components.Generic do
   attr(:href, :string, required: true)
   attr(:class, :string, default: "")
   attr(:theme, :string, default: "primary")
+  attr(:size, :string, default: "md")
   attr(:disabled, :boolean, default: false)
   attr(:method, :string, default: "get")
   attr(:mt?, :boolean, default: true)
@@ -113,7 +131,8 @@ defmodule PlausibleWeb.Components.Generic do
       assign(assigns,
         onclick: onclick,
         button_base_class: @button_base_class,
-        theme_class: theme_class
+        theme_class: theme_class,
+        size_class: @button_sizes[assigns.size]
       )
 
     ~H"""
@@ -123,6 +142,7 @@ defmodule PlausibleWeb.Components.Generic do
       class={[
         @mt? && "mt-6",
         @button_base_class,
+        @size_class,
         @theme_class,
         @class
       ]}
@@ -186,9 +206,13 @@ defmodule PlausibleWeb.Components.Generic do
   attr(:title, :any, default: nil)
   attr(:theme, :atom, default: :yellow)
   attr(:dismissable_id, :any, default: nil)
+  attr(:show_icon, :boolean, default: true)
   attr(:class, :string, default: "")
+  attr(:icon_class, :string, default: "")
   attr(:rest, :global)
   slot(:inner_block)
+  slot(:actions)
+  slot(:icon)
 
   def notice(assigns) do
     assigns = assign(assigns, :theme, Map.fetch!(@notice_themes, assigns.theme))
@@ -203,30 +227,31 @@ defmodule PlausibleWeb.Components.Generic do
         >
           <Heroicons.x_mark class="h-4 w-4 hover:stroke-2" />
         </button>
-        <div class="flex gap-x-3">
-          <div :if={@title} class="shrink-0">
-            <svg
-              class={"h-5 w-5 #{@theme.icon}"}
-              viewBox="0 0 20 20"
-              fill="currentColor"
-              aria-hidden="true"
-            >
-              <path
-                fill-rule="evenodd"
-                d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z"
-                clip-rule="evenodd"
-              />
-            </svg>
-          </div>
-          <div class="w-full flex flex-col gap-y-1.5">
-            <h3 :if={@title} class={"font-medium #{@theme.title_text}"}>
-              {@title}
-            </h3>
-            <div class={"#{@theme.body_text}"}>
-              <p>
-                {render_slot(@inner_block)}
-              </p>
+        <div class={[
+          "flex gap-3",
+          @actions != [] && "items-start flex-col md:items-center md:flex-row"
+        ]}>
+          <div class="flex gap-x-3 flex-1">
+            <div :if={@show_icon && @title} class={["shrink-0 mt-px", @icon_class]}>
+              <%= if @icon != [] do %>
+                {render_slot(@icon)}
+              <% else %>
+                <.exclamation_triangle_icon class={"size-4.5 #{@theme.icon}"} />
+              <% end %>
             </div>
+            <div class="flex-1 flex flex-col gap-y-1.5">
+              <h3 :if={@title} class={"font-medium #{@theme.title_text}"}>
+                {@title}
+              </h3>
+              <div class={"#{@theme.body_text}"}>
+                <p class="text-pretty">
+                  {render_slot(@inner_block)}
+                </p>
+              </div>
+            </div>
+          </div>
+          <div :if={@actions != []} class="shrink-0 flex gap-2">
+            {render_slot(@actions)}
           </div>
         </div>
       </div>
@@ -393,7 +418,7 @@ defmodule PlausibleWeb.Components.Generic do
       ~H"""
       <.link
         class={[
-          "inline-flex items-center gap-x-0.5",
+          "inline-flex items-center gap-x-1",
           @class
         ]}
         href={@href}
@@ -403,7 +428,7 @@ defmodule PlausibleWeb.Components.Generic do
         {@rest}
       >
         {render_slot(@inner_block)}
-        <Heroicons.arrow_top_right_on_square class={["opacity-60", @icon_class]} />
+        <.external_link_icon class={[@icon_class]} />
       </.link>
       """
     else
@@ -425,10 +450,10 @@ defmodule PlausibleWeb.Components.Generic do
       viewBox="0 0 24 24"
       {@rest}
     >
-      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4">
       </circle>
       <path
-        className="opacity-75"
+        class="opacity-75"
         fill="currentColor"
         d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
       >
@@ -438,13 +463,39 @@ defmodule PlausibleWeb.Components.Generic do
   end
 
   attr :id, :string, required: true
-  attr :js_active_var, :string, required: true
+  attr :js_active_var, :string, default: nil
+  attr :checked, :boolean, default: nil
   attr :id_suffix, :string, default: ""
   attr :disabled, :boolean, default: false
 
   attr(:rest, :global)
 
+  @doc """
+   Renders toggle input.
+
+   Can be used in two modes:
+
+   1. Alpine JS mode: Pass `:js_active_var` to control toggle state via Alpine JS.
+      Set this outside this component with `x-data="{ <variable name>: <initial state> }"`.
+
+   2. Server-side mode: Pass `:checked` boolean and `phx-click` event handler.
+
+   ### Examples - Alpine JS mode
+   ```
+    <div x-data="{ showGoals: false }>
+      <.toggle_switch id="show_goals" js_active_var="showGoals" />
+    </div>
+   ```
+
+   ### Examples - Server-side mode
+   ```
+    <.toggle_switch id="my_toggle" checked={@my_toggle} phx-click="toggle-my-setting" phx-target={@myself} />
+   ```
+  """
   def toggle_switch(assigns) do
+    server_mode? = not is_nil(assigns.checked)
+    assigns = assign(assigns, :server_mode?, server_mode?)
+
     ~H"""
     <button
       id={"#{@id}-#{@id_suffix}"}
@@ -452,13 +503,34 @@ defmodule PlausibleWeb.Components.Generic do
       aria-labelledby={@id}
       role="switch"
       type="button"
-      x-on:click={"#{@js_active_var} = !#{@js_active_var}"}
-      x-bind:aria-checked={@js_active_var}
+      x-on:click={if(!@server_mode? && @js_active_var, do: "#{@js_active_var} = !#{@js_active_var}")}
+      x-bind:aria-checked={if(!@server_mode? && @js_active_var, do: @js_active_var)}
+      aria-checked={if(@server_mode?, do: to_string(@checked))}
       disabled={@disabled}
       {@rest}
     >
       <span
-        class="relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2"
+        :if={@server_mode?}
+        class={[
+          "relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2",
+          if(@checked, do: "bg-indigo-600", else: "dark:bg-gray-600 bg-gray-200"),
+          if(@disabled, do: "opacity-50")
+        ]}
+      >
+        <span
+          aria-hidden="true"
+          class={[
+            "pointer-events-none inline-block size-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out",
+            if(@checked, do: "dark:bg-white translate-x-5", else: "dark:bg-white translate-x-0")
+          ]}
+        />
+      </span>
+      <span
+        :if={!@server_mode?}
+        class={[
+          "relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2",
+          if(@disabled, do: "opacity-50")
+        ]}
         x-bind:class={"#{@js_active_var} ? 'bg-indigo-600' : 'dark:bg-gray-600 bg-gray-200'"}
       >
         <span
@@ -468,6 +540,54 @@ defmodule PlausibleWeb.Components.Generic do
         />
       </span>
     </button>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :js_active_var, :string, required: true
+  attr :id_suffix, :string, default: ""
+  attr :disabled, :boolean, default: false
+  attr :label, :string, required: true
+  attr :help_text, :string, default: nil
+  attr :show_help_text_only_when_active?, :boolean, default: false
+  attr :mt?, :boolean, default: true
+
+  attr(:rest, :global)
+
+  @doc """
+   Renders toggle input with a label. Clicking the label also toggles the toggle.
+   Needs `:js_active_var` that controls toggle state.
+   Set this outside this component with `x-data="{ <variable name>: <initial state> }"`
+   Can be configured to always show a description of the field / help text `:help_text`,
+   or only show the help text when the toggle is activated `:show_help_text_only_when_active?`.
+  """
+  def toggle_field(assigns) do
+    ~H"""
+    <div class={["flex items-start justify-between gap-5 w-full", @mt? && "mt-6"]}>
+      <div class="flex-1">
+        <span
+          x-on:click={"#{@js_active_var} = !#{@js_active_var}"}
+          class="text-sm font-medium text-gray-900 dark:text-gray-100 cursor-pointer"
+        >
+          {@label}
+        </span>
+        <p
+          :if={@help_text}
+          class="text-gray-500 dark:text-gray-400 text-sm text-pretty"
+          x-show={if @show_help_text_only_when_active?, do: @js_active_var, else: "true"}
+          x-cloak={@show_help_text_only_when_active?}
+        >
+          {@help_text}
+        </p>
+      </div>
+      <PlausibleWeb.Components.Generic.toggle_switch
+        id={@id}
+        id_suffix={@id_suffix}
+        js_active_var={@js_active_var}
+        disabled={@disabled}
+        {@rest}
+      />
+    </div>
     """
   end
 
@@ -522,12 +642,12 @@ defmodule PlausibleWeb.Components.Generic do
             current_team={@current_team}
             site={@site}
           >
-            <div class="p-6">
+            <div class="p-4 sm:p-6">
               {render_slot(@inner_block)}
             </div>
           </PlausibleWeb.Components.Billing.feature_gate>
         <% else %>
-          <div class="p-6">
+          <div class="p-4 sm:p-6">
             {render_slot(@inner_block)}
           </div>
         <% end %>
@@ -555,7 +675,7 @@ defmodule PlausibleWeb.Components.Generic do
       "top-0",
       "-translate-y-full",
       "z-[1000]",
-      "sm:max-w-72",
+      "sm:max-w-64",
       "w-max"
     ]
 
@@ -593,7 +713,7 @@ defmodule PlausibleWeb.Components.Generic do
           x-transition:leave-start="opacity-100"
           x-transition:leave-end="opacity-0"
         >
-          <div class="bg-gray-800 text-white rounded-sm px-2.5 py-1.5 text-xs font-medium">
+          <div class="bg-gray-800 text-white rounded-sm px-2.5 py-1.5 text-xs font-medium whitespace-normal">
             {render_slot(@tooltip_content)}
           </div>
         </div>
@@ -664,14 +784,26 @@ defmodule PlausibleWeb.Components.Generic do
     """
   end
 
-  attr(:rest, :global, include: ~w(fill stroke stroke-width))
+  attr(:rest, :global, include: ~w(fill stroke stroke-width class))
   attr(:name, :atom, required: true)
   attr(:outline, :boolean, default: true)
   attr(:solid, :boolean, default: false)
   attr(:mini, :boolean, default: false)
 
   def dynamic_icon(assigns) do
-    apply(Heroicons, assigns.name, [assigns])
+    case assigns.name do
+      :tag ->
+        PlausibleWeb.Components.Icons.tag_icon(%{class: assigns.rest[:class]})
+
+      :subscription ->
+        PlausibleWeb.Components.Icons.subscription_icon(%{class: assigns.rest[:class]})
+
+      :api_keys ->
+        PlausibleWeb.Components.Icons.key_icon(%{class: assigns.rest[:class]})
+
+      icon_name ->
+        apply(Heroicons, icon_name, [assigns])
+    end
   end
 
   attr(:width, :integer, default: 100)
@@ -681,11 +813,15 @@ defmodule PlausibleWeb.Components.Generic do
   defp icon_class(link_assigns) do
     classes = List.wrap(link_assigns[:class]) |> Enum.join(" ")
 
-    if String.contains?(classes, "text-sm") or
-         String.contains?(classes, "text-xs") do
-      ["w-3 h-3"]
-    else
-      ["w-4 h-4"]
+    cond do
+      String.contains?(classes, "text-sm") ->
+        ["size-3.5"]
+
+      String.contains?(classes, "text-xs") ->
+        ["size-3"]
+
+      true ->
+        ["size-4"]
     end
   end
 
@@ -754,7 +890,14 @@ defmodule PlausibleWeb.Components.Generic do
 
   def table(assigns) do
     ~H"""
-    <table :if={not Enum.empty?(@rows)} class={@width} {@rest}>
+    <table
+      :if={not Enum.empty?(@rows)}
+      class={[
+        "[&:not(:has(thead))>tbody>tr:first-child>td]:pt-0 [&>tbody>tr:last-child>td]:pb-0",
+        @width
+      ]}
+      {@rest}
+    >
       <thead :if={@thead != []}>
         <tr class="border-b border-gray-200 dark:border-gray-700">
           {render_slot(@thead)}
@@ -791,15 +934,19 @@ defmodule PlausibleWeb.Components.Generic do
 
     ~H"""
     <td
-      class={[
-        @height,
-        "text-sm px-6 py-4 first:pl-0 last:pr-0 whitespace-nowrap",
-        @truncate && "truncate",
-        @max_width,
-        @actions && "flex text-right justify-end",
-        @hide_on_mobile && "hidden md:table-cell",
-        @class
-      ]}
+      class={
+        [
+          @height,
+          "text-sm px-3 md:px-6 py-3 md:py-4 first:pl-0 last:pr-0 whitespace-nowrap",
+          # allow tooltips overflow cells vertically
+          "overflow-visible",
+          @truncate && "truncate",
+          @max_width,
+          @actions && "flex text-right justify-end",
+          @hide_on_mobile && "hidden md:table-cell",
+          @class
+        ]
+      }
       {@rest}
     >
       <div :if={@actions} class="flex gap-1">
@@ -940,6 +1087,7 @@ defmodule PlausibleWeb.Components.Generic do
       "dark:group-hover/button:" <> text.dark_hover,
       "transition-colors",
       "duration-150",
+      "group-disabled/button:opacity-50",
       assigns.icon_class
     ]
 
@@ -1043,12 +1191,12 @@ defmodule PlausibleWeb.Components.Generic do
               type="text"
               name="filter-text"
               id="filter-text"
-              class="w-full max-w-80 pl-8 text-sm dark:bg-gray-750 dark:text-gray-300 focus:ring-indigo-500 focus:border-indigo-500 block border-gray-300 dark:border-gray-750 rounded-md dark:placeholder:text-gray-400 focus:outline-none focus:ring-3 focus:ring-indigo-500/20 dark:focus:ring-indigo-500/25 focus:border-indigo-500"
+              class="w-full max-w-80 pl-8 pr-3.5 py-2.5 text-sm dark:bg-gray-750 dark:text-gray-300 focus:ring-indigo-500 focus:border-indigo-500 block border-gray-300 dark:border-gray-750 rounded-md dark:placeholder:text-gray-400 focus:outline-none focus:ring-3 focus:ring-indigo-500/20 dark:focus:ring-indigo-500/25 focus:border-indigo-500"
               placeholder="Press / to search"
               x-ref="filter_text"
               phx-debounce={200}
               autocomoplete="off"
-              x-on:keydown.slash.window="if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) || document.activeElement.isContentEditable) return; $refs.filter_text.focus(); $refs.filter_text.select();"
+              x-on:keydown.slash.window="if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) || document.activeElement.isContentEditable) return; $event.preventDefault(); $refs.filter_text.focus(); $refs.filter_text.select();"
               x-on:keydown.escape="$refs.filter_text.blur(); $refs.reset_filter?.dispatchEvent(new Event('click', {bubbles: true, cancelable: true}));"
               value={@filter_text}
               x-on:focus={"$refs.filter_text.placeholder = '#{@placeholder}';"}
@@ -1146,7 +1294,7 @@ defmodule PlausibleWeb.Components.Generic do
   end
 
   attr(:class, :string, default: "")
-  attr(:color, :atom, default: :gray, values: [:gray, :indigo, :yellow, :green])
+  attr(:color, :atom, default: :gray, values: [:gray, :indigo, :yellow, :green, :red])
   attr(:rest, :global)
   slot(:inner_block, required: true)
 
@@ -1156,7 +1304,7 @@ defmodule PlausibleWeb.Components.Generic do
     ~H"""
     <span
       class={[
-        "inline-flex items-center text-xs font-medium py-1 px-2 rounded-md",
+        "inline-flex items-center text-xs font-medium py-[3px] px-[7px] rounded-md",
         @color_classes,
         @class
       ]}
@@ -1181,5 +1329,9 @@ defmodule PlausibleWeb.Components.Generic do
 
   defp get_pill_color_classes(:green) do
     "bg-green-100/70 text-green-800 dark:bg-green-900/40 dark:text-green-300"
+  end
+
+  defp get_pill_color_classes(:red) do
+    "bg-red-100/60 text-red-700 dark:bg-red-800/40 dark:text-red-300"
   end
 end

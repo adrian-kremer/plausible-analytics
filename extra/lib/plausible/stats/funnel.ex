@@ -11,9 +11,10 @@ defmodule Plausible.Stats.Funnel do
 
   import Ecto.Query
   import Plausible.Stats.SQL.Fragments
+  import Plausible.Stats.Util, only: [percentage: 2]
 
   alias Plausible.ClickhouseRepo
-  alias Plausible.Stats.Base
+  alias Plausible.Stats.{Base, Query}
 
   @spec funnel(Plausible.Site.t(), Plausible.Stats.Query.t(), Funnel.t() | pos_integer()) ::
           {:ok, map()} | {:error, :funnel_not_found}
@@ -28,10 +29,16 @@ defmodule Plausible.Stats.Funnel do
   end
 
   def funnel(_site, query, %Funnel{} = funnel) do
+    goals = Enum.map(funnel.steps, & &1.goal)
+
     funnel_data =
       query
+      |> Query.set(preloaded_goals: %{all: [], matching_toplevel_filters: goals})
       |> Base.base_event_query()
-      |> query_funnel(funnel)
+      |> funnel_query(funnel)
+      # We pass the query struct to record query metadata for
+      # the CH debug console.
+      |> ClickhouseRepo.all(query: query)
 
     # Funnel definition steps are 1-indexed, if there's index 0 in the resulting query,
     # it signifies the number of visitors that haven't entered the funnel.
@@ -58,7 +65,7 @@ defmodule Plausible.Stats.Funnel do
      }}
   end
 
-  defp query_funnel(query, funnel_definition) do
+  defp funnel_query(query, funnel_definition) do
     q_events =
       from(e in query,
         select: %{user_id: e.user_id, _sample_factor: fragment("any(_sample_factor)")},
@@ -68,13 +75,10 @@ defmodule Plausible.Stats.Funnel do
       )
       |> select_funnel(funnel_definition)
 
-    query =
-      from(f in subquery(q_events),
-        select: {f.step, total()},
-        group_by: f.step
-      )
-
-    ClickhouseRepo.all(query)
+    from(f in subquery(q_events),
+      select: {f.step, total()},
+      group_by: f.step
+    )
   end
 
   defp select_funnel(db_query, funnel_definition) do
@@ -90,10 +94,21 @@ defmodule Plausible.Stats.Funnel do
       end)
 
     dynamic_window_funnel =
-      dynamic(
-        [q],
-        fragment("windowFunnel(?)(timestamp, ?)", @funnel_window_duration, ^window_funnel_steps)
-      )
+      if funnel_definition.strict_order do
+        dynamic(
+          [q],
+          fragment(
+            "windowFunnel(?, 'strict_order')(timestamp, ?)",
+            @funnel_window_duration,
+            ^window_funnel_steps
+          )
+        )
+      else
+        dynamic(
+          [q],
+          fragment("windowFunnel(?)(timestamp, ?)", @funnel_window_duration, ^window_funnel_steps)
+        )
+      end
 
     from(q in db_query,
       select_merge:
@@ -152,25 +167,5 @@ defmodule Plausible.Stats.Funnel do
     end)
     |> elem(2)
     |> Enum.reverse()
-  end
-
-  defp percentage(x, y) when x in [0, nil] or y in [0, nil] do
-    "0"
-  end
-
-  defp percentage(x, y) do
-    result =
-      x
-      |> Decimal.div(y)
-      |> Decimal.mult(100)
-      |> Decimal.round(2)
-      |> Decimal.to_string()
-
-    case result do
-      <<compact::binary-size(1), ".00">> -> compact
-      <<compact::binary-size(2), ".00">> -> compact
-      <<compact::binary-size(3), ".00">> -> compact
-      decimal -> decimal
-    end
   end
 end

@@ -1,73 +1,35 @@
-import React, { useRef } from 'react'
-import { Popover, Transition } from '@headlessui/react'
-import { ChevronDownIcon } from '@heroicons/react/20/solid'
-import classNames from 'classnames'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import * as storage from '../../util/storage'
-import { isModifierPressed, isTyping, Keybind } from '../../keybinding'
-import { useQueryContext } from '../../query-context'
-import { useSiteContext, PlausibleSite } from '../../site-context'
-import { useMatch } from 'react-router-dom'
-import { rootRoute } from '../../router'
-import { BlurMenuButtonOnEscape, popover } from '../../components/popover'
-import { DashboardQuery } from '../../query'
-import { Dayjs } from 'dayjs'
-import { QueryPeriod } from '../../query-time-periods'
+import { SegmentedControl } from '../../components/segmented-control'
+import {
+  Interval,
+  GetIntervalProps,
+  validIntervals,
+  getDefaultInterval
+} from './intervals'
+import { PlausibleSite } from '../../site-context'
+import { DashboardPeriod } from '../../dashboard-time-periods'
 
-const INTERVAL_LABELS: Record<string, string> = {
-  minute: 'Minuten',
-  hour: 'Stunden',
-  day: 'Tage',
-  week: 'Wochen',
-  month: 'Monate'
+const INTERVAL_LABELS: Record<Interval, string> = {
+  [Interval.minute]: 'Minuten',
+  [Interval.hour]: 'Stunden',
+  [Interval.day]: 'Tage',
+  [Interval.week]: 'Wochen',
+  [Interval.month]: 'Monate'
 }
 
-function validIntervals(site: PlausibleSite, query: DashboardQuery): string[] {
-  if (query.period === QueryPeriod.custom && query.from && query.to) {
-    if (query.to.diff(query.from, 'days') < 7) {
-      return ['day']
-    } else if (query.to.diff(query.from, 'months') < 1) {
-      return ['day', 'week']
-    } else if (query.to.diff(query.from, 'months') < 12) {
-      return ['day', 'week', 'month']
-    } else {
-      return ['week', 'month']
-    }
-  } else {
-    return site.validIntervalsByPeriod[query.period]
-  }
+function getIntervalStorageKey(
+  domain: PlausibleSite['domain'],
+  period: DashboardPeriod
+) {
+  return `interval__${period}__${domain}`
 }
 
-function getDefaultInterval(
-  query: DashboardQuery,
-  validIntervals: string[]
-): string {
-  const defaultByPeriod: Record<string, string> = {
-    day: 'hour',
-    '7d': 'day',
-    '6mo': 'month',
-    '12mo': 'month',
-    year: 'month'
-  }
-
-  if (query.period === QueryPeriod.custom && query.from && query.to) {
-    return defaultForCustomPeriod(query.from, query.to)
-  } else {
-    return defaultByPeriod[query.period] || validIntervals[0]
-  }
-}
-
-function defaultForCustomPeriod(from: Dayjs, to: Dayjs): string {
-  if (to.diff(from, 'days') < 30) {
-    return 'day'
-  } else if (to.diff(from, 'months') < 6) {
-    return 'week'
-  } else {
-    return 'month'
-  }
-}
-
-function getStoredInterval(period: string, domain: string): string | null {
-  const stored = storage.getItem(`interval__${period}__${domain}`)
+function getStoredInterval(
+  domain: PlausibleSite['domain'],
+  period: DashboardPeriod
+): string | null {
+  const stored = storage.getItem(getIntervalStorageKey(domain, period))
 
   if (stored === 'date') {
     return 'day'
@@ -76,113 +38,120 @@ function getStoredInterval(period: string, domain: string): string | null {
   }
 }
 
-function storeInterval(period: string, domain: string, interval: string): void {
-  storage.setItem(`interval__${period}__${domain}`, interval)
+function storeInterval(
+  domain: PlausibleSite['domain'],
+  period: DashboardPeriod,
+  interval: Interval
+): void {
+  storage.setItem(getIntervalStorageKey(domain, period), interval)
 }
 
-export const getCurrentInterval = function (
-  site: PlausibleSite,
-  query: DashboardQuery
-): string {
-  const options = validIntervals(site, query)
+export const useStoredInterval = (
+  props: Pick<PlausibleSite, 'domain'> & GetIntervalProps
+) => {
+  const { domain, period, from, to, comparison, compare_from, compare_to } =
+    props
 
-  const storedInterval = getStoredInterval(query.period, site.domain)
-  const defaultInterval = getDefaultInterval(query, options)
+  // Dayjs objects are new references on every render, so we
+  // use valueOf() (ms since epoch) to get stable primitive
+  // values for dependency arrays.
+  const customFrom = from?.valueOf()
+  const customTo = to?.valueOf()
+  const customComparisonFrom = compare_from?.valueOf()
+  const customComparisonTo = compare_to?.valueOf()
 
-  if (storedInterval && options.includes(storedInterval)) {
-    return storedInterval
-  } else {
-    return defaultInterval
+  const { availableIntervals, storableIntervals } = useMemo(() => {
+    return {
+      availableIntervals: validIntervals(props),
+      storableIntervals: validIntervals({ ...props, comparison: null })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    period,
+    customFrom,
+    customTo,
+    comparison,
+    customComparisonFrom,
+    customComparisonTo
+  ])
+
+  const isValid = useCallback(
+    (interval: string | null): interval is Interval =>
+      !!interval && (availableIntervals as string[]).includes(interval),
+    [availableIntervals]
+  )
+
+  // We skip storing interval selections that are only available
+  // due to a custom comparison period. E.g. even though `month`
+  // interval is available when comparing today with a whole year,
+  // we shouldn't store `interval__day__site.com = month`.
+  const isStorable = useCallback(
+    (interval: string | null): interval is Interval =>
+      !!interval && (storableIntervals as string[]).includes(interval),
+    [storableIntervals]
+  )
+
+  const storedInterval = getStoredInterval(domain, period)
+
+  const [selectedInterval, setSelectedInterval] = useState<string | null>(null)
+
+  useEffect(() => {
+    setSelectedInterval(null)
+  }, [availableIntervals])
+
+  const onIntervalClick = useCallback(
+    (interval: Interval) => {
+      if (isStorable(interval)) {
+        storeInterval(domain, period, interval)
+      }
+      setSelectedInterval(interval)
+    },
+    [domain, period, isStorable]
+  )
+
+  return {
+    selectedInterval: isValid(selectedInterval)
+      ? selectedInterval
+      : isValid(storedInterval)
+        ? storedInterval
+        : getDefaultInterval(props),
+    onIntervalClick,
+    availableIntervals
   }
 }
 
 export function IntervalPicker({
-  onIntervalUpdate
+  selectedInterval,
+  onIntervalClick,
+  options
 }: {
-  onIntervalUpdate: (interval: string) => void
+  selectedInterval: Interval
+  onIntervalClick: (interval: Interval) => void
+  options: Interval[]
 }): JSX.Element | null {
-  const menuElement = useRef<HTMLButtonElement>(null)
-  const { query } = useQueryContext()
-  const site = useSiteContext()
-  const dashboardRouteMatch = useMatch(rootRoute.path)
-
-  if (query.period == 'realtime') {
+  if (options.length === 0) {
     return null
   }
 
-  const options = validIntervals(site, query)
-  const currentInterval = getCurrentInterval(site, query)
-
-  function updateInterval(interval: string): void {
-    storeInterval(query.period, site.domain, interval)
-    onIntervalUpdate(interval)
-  }
+  const controlOptions = options.map((value) => ({
+    value,
+    label: INTERVAL_LABELS[value] ?? value
+  }))
 
   return (
-    <>
-      {!!dashboardRouteMatch && (
-        <Keybind
-          targetRef="document"
-          type="keydown"
-          keyboardKey="i"
-          handler={() => {
-            menuElement.current?.click()
-          }}
-          shouldIgnoreWhen={[isModifierPressed, isTyping]}
-        />
-      )}
-      <Popover className="relative inline-block">
-        {({ close: closeDropdown }) => (
-          <>
-            <BlurMenuButtonOnEscape targetRef={menuElement} />
-            <Popover.Button
-              ref={menuElement}
-              className={classNames(
-                popover.toggleButton.classNames.linkLike,
-                'rounded-sm text-sm flex items-center'
-              )}
-            >
-              {INTERVAL_LABELS[currentInterval]}
-              <ChevronDownIcon className="ml-1 h-4 w-4" aria-hidden="true" />
-            </Popover.Button>
-
-            <Transition
-              as="div"
-              {...popover.transition.props}
-              className={classNames(
-                popover.transition.classNames.right,
-                'mt-2 w-56'
-              )}
-            >
-              <Popover.Panel
-                className={classNames(
-                  popover.panel.classNames.roundedSheet,
-                  'font-normal'
-                )}
-              >
-                {options.map((option) => (
-                  <button
-                    key={option}
-                    onClick={() => {
-                      updateInterval(option)
-                      closeDropdown()
-                    }}
-                    data-selected={option == currentInterval}
-                    className={classNames(
-                      popover.items.classNames.navigationLink,
-                      popover.items.classNames.selectedOption,
-                      popover.items.classNames.hoverLink,
-                      'w-full text-left'
-                    )}
-                  >
-                    {INTERVAL_LABELS[option]}
-                  </button>
-                ))}
-              </Popover.Panel>
-            </Transition>
-          </>
-        )}
-      </Popover>
-    </>
+    <div className="flex justify-between items-center gap-x-2 w-full pl-4 pr-2 py-1">
+      <span className="shrink-0 text-sm font-medium text-gray-700 dark:text-gray-100">
+        Graph interval
+      </span>
+      <SegmentedControl
+        ariaLabel="Graph data interval"
+        options={controlOptions}
+        selected={selectedInterval}
+        onSelect={onIntervalClick}
+        getTestId={(_value, isSelected) =>
+          isSelected ? 'current-graph-interval' : 'graph-interval'
+        }
+      />
+    </div>
   )
 }

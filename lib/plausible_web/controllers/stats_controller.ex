@@ -18,10 +18,6 @@ defmodule PlausibleWeb.StatsController do
     Api.StatsController --) Browser: {"top_stats": [...]}
     Note left of Browser: TopStats.render()
 
-    Browser -) Api.StatsController: GET /api/stats/mydomain.com/main-graph
-    Api.StatsController --) Browser: [{"plot": [...], "labels": [...]}, ...]
-    Note left of Browser: VisitorGraph.render()
-
     Browser -) Api.StatsController: GET /api/stats/mydomain.com/sources
     Api.StatsController --) Browser: [{"name": "Google", "visitors": 292150}, ...]
     Note left of Browser: Sources.render()
@@ -45,12 +41,10 @@ defmodule PlausibleWeb.StatsController do
   use Plausible.Repo
 
   alias Plausible.Sites
-  alias Plausible.Stats.{Filters, Query}
   alias Plausible.Teams
-  alias PlausibleWeb.Api
   alias Plausible.Billing.Feature.SharedLinks
 
-  plug(PlausibleWeb.Plugs.AuthorizeSiteAccess when action in [:stats, :csv_export])
+  plug(PlausibleWeb.Plugs.AuthorizeSiteAccess when action in [:stats])
 
   def stats(%{assigns: %{site: site}} = conn, _params) do
     site = Plausible.Repo.preload(site, :owners)
@@ -63,6 +57,14 @@ defmodule PlausibleWeb.StatsController do
 
     consolidated_view? = Plausible.Sites.consolidated?(site)
 
+    {exploration_journey_end_event, exploration_max_journey_steps} =
+      on_ee(
+        do:
+          {Plausible.Stats.Exploration.Journey.Step.journey_end_event(),
+           Plausible.Stats.Exploration.max_steps()},
+        else: {"", 0}
+      )
+
     consolidated_view_available? =
       on_ee(do: Plausible.ConsolidatedView.ok_to_display?(site.team), else: false)
 
@@ -72,6 +74,7 @@ defmodule PlausibleWeb.StatsController do
       conn.params["skip_to_dashboard"] == "true" or consolidated_view?
 
     {:ok, segments} = Plausible.Segments.get_all_for_site(site, site_role)
+    segments = Enum.map(segments, &Plausible.Segments.to_response_map(&1, site))
 
     cond do
       consolidated_view? and not consolidated_view_available? and site_role != :super_admin ->
@@ -94,13 +97,16 @@ defmodule PlausibleWeb.StatsController do
           title: title(conn, site),
           demo: demo,
           flags: flags,
-          is_dbip: is_dbip(),
+          dbip?: dbip?(),
           segments: segments,
           load_dashboard_js: true,
           hide_footer?: if(ce?() || demo, do: false, else: site_role != :public),
           consolidated_view?: consolidated_view?,
           consolidated_view_available?: consolidated_view_available?,
-          team_identifier: team_identifier
+          exploration_journey_end_event: exploration_journey_end_event,
+          exploration_max_journey_steps: exploration_max_journey_steps,
+          team_identifier: team_identifier,
+          limited_to_segment_id: nil
         )
 
       !stats_start_date && can_see_stats? ->
@@ -126,120 +132,6 @@ defmodule PlausibleWeb.StatsController do
   end
 
   @doc """
-  The export is limited to 300 entries for other reports and 100 entries for pages because bigger result sets
-  start causing failures. Since we request data like time on page or bounce_rate for pages in a separate query
-  using the IN filter, it causes the requests to balloon in payload size.
-  """
-  def csv_export(conn, params) do
-    if is_nil(params["interval"]) or Plausible.Stats.Interval.valid?(params["interval"]) do
-      site = Plausible.Repo.preload(conn.assigns.site, :owners)
-      query = Query.from(site, params, debug_metadata(conn))
-
-      date_range = Query.date_range(query)
-
-      filename =
-        ~c"Plausible export #{params["domain"]} #{Date.to_iso8601(date_range.first)}  to #{Date.to_iso8601(date_range.last)} .zip"
-
-      params = Map.merge(params, %{"limit" => "300", "csv" => "True", "detailed" => "True"})
-      limited_params = Map.merge(params, %{"limit" => "100"})
-
-      csvs = %{
-        ~c"visitors.csv" => fn -> main_graph_csv(site, query) end,
-        ~c"sources.csv" => fn -> Api.StatsController.sources(conn, params) end,
-        ~c"channels.csv" => fn -> Api.StatsController.channels(conn, params) end,
-        ~c"utm_mediums.csv" => fn -> Api.StatsController.utm_mediums(conn, params) end,
-        ~c"utm_sources.csv" => fn -> Api.StatsController.utm_sources(conn, params) end,
-        ~c"utm_campaigns.csv" => fn -> Api.StatsController.utm_campaigns(conn, params) end,
-        ~c"utm_contents.csv" => fn -> Api.StatsController.utm_contents(conn, params) end,
-        ~c"utm_terms.csv" => fn -> Api.StatsController.utm_terms(conn, params) end,
-        ~c"pages.csv" => fn -> Api.StatsController.pages(conn, limited_params) end,
-        ~c"entry_pages.csv" => fn -> Api.StatsController.entry_pages(conn, params) end,
-        ~c"exit_pages.csv" => fn -> Api.StatsController.exit_pages(conn, limited_params) end,
-        ~c"countries.csv" => fn -> Api.StatsController.countries(conn, params) end,
-        ~c"regions.csv" => fn -> Api.StatsController.regions(conn, params) end,
-        ~c"cities.csv" => fn -> Api.StatsController.cities(conn, params) end,
-        ~c"browsers.csv" => fn -> Api.StatsController.browsers(conn, params) end,
-        ~c"browser_versions.csv" => fn -> Api.StatsController.browser_versions(conn, params) end,
-        ~c"operating_systems.csv" => fn -> Api.StatsController.operating_systems(conn, params) end,
-        ~c"operating_system_versions.csv" => fn ->
-          Api.StatsController.operating_system_versions(conn, params)
-        end,
-        ~c"devices.csv" => fn -> Api.StatsController.screen_sizes(conn, params) end,
-        ~c"conversions.csv" => fn -> Api.StatsController.conversions(conn, params) end,
-        ~c"referrers.csv" => fn -> Api.StatsController.referrers(conn, params) end,
-        ~c"custom_props.csv" => fn -> Api.StatsController.all_custom_prop_values(conn, params) end
-      }
-
-      csv_values =
-        Map.values(csvs)
-        |> Plausible.ClickhouseRepo.parallel_tasks()
-
-      csvs =
-        Map.keys(csvs)
-        |> Enum.zip(csv_values)
-        |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-        |> Enum.map(fn {k, v} -> {k, IO.iodata_to_binary(v)} end)
-
-      {:ok, {_, zip_content}} = :zip.create(filename, csvs, [:memory])
-
-      conn
-      |> put_resp_content_type("application/zip")
-      |> put_resp_header("content-disposition", "attachment; filename=\"#{filename}\"")
-      |> delete_resp_cookie("exporting")
-      |> send_resp(200, zip_content)
-    else
-      conn
-      |> send_resp(400, "")
-      |> halt()
-    end
-  end
-
-  defp main_graph_csv(site, query) do
-    {metrics, column_headers} = csv_graph_metrics(query)
-
-    map_bucket_to_row = fn bucket -> Enum.map([:date | metrics], &bucket[&1]) end
-    prepend_column_headers = fn data -> [column_headers | data] end
-
-    Plausible.Stats.timeseries(site, query, metrics)
-    |> elem(0)
-    |> Enum.map(map_bucket_to_row)
-    |> prepend_column_headers.()
-    |> NimbleCSV.RFC4180.dump_to_iodata()
-  end
-
-  defp csv_graph_metrics(query) do
-    include_scroll_depth? =
-      !query.include_imported &&
-        Filters.filtering_on_dimension?(query, "event:page", behavioral_filters: :ignore)
-
-    {metrics, column_headers} =
-      if Filters.filtering_on_dimension?(query, "event:goal", max_depth: 0) do
-        {
-          [:visitors, :events, :conversion_rate],
-          [:date, :unique_conversions, :total_conversions, :conversion_rate]
-        }
-      else
-        metrics = [
-          :visitors,
-          :pageviews,
-          :visits,
-          :views_per_visit,
-          :bounce_rate,
-          :visit_duration
-        ]
-
-        metrics = if include_scroll_depth?, do: metrics ++ [:scroll_depth], else: metrics
-
-        {
-          metrics,
-          [:date | metrics]
-        }
-      end
-
-    {metrics, column_headers}
-  end
-
-  @doc """
     Authorizes and renders a shared link:
     1. Shared link with no password protection: needs to just make sure the shared link entry is still
     in our database. This check makes sure shared link access can be revoked by the site admins. If the
@@ -258,13 +150,14 @@ defmodule PlausibleWeb.StatsController do
   """
   def shared_link(conn, %{"domain" => domain, "auth" => auth}) do
     case find_shared_link(domain, auth) do
-      {:password_protected, shared_link} ->
-        render_password_protected_shared_link(conn, shared_link)
+      {:ok, shared_link} ->
+        if Plausible.Site.SharedLink.password_protected?(shared_link) do
+          render_password_protected_shared_link(conn, shared_link)
+        else
+          render_shared_link(conn, shared_link)
+        end
 
-      {:unlisted, shared_link} ->
-        render_shared_link(conn, shared_link)
-
-      :not_found ->
+      {:error, :not_found} ->
         render_error(conn, 404)
     end
   end
@@ -280,7 +173,9 @@ defmodule PlausibleWeb.StatsController do
       )
 
     if shared_link do
-      new_link_format = Routes.stats_path(conn, :shared_link, shared_link.site.domain, auth: slug)
+      new_link_format =
+        Routes.stats_path(conn, :shared_link, shared_link.site.domain, [], auth: slug)
+
       redirect(conn, to: new_link_format)
     else
       render_error(conn, 404)
@@ -291,18 +186,38 @@ defmodule PlausibleWeb.StatsController do
     render_error(conn, 400)
   end
 
-  defp render_password_protected_shared_link(conn, shared_link) do
-    with conn <- Plug.Conn.fetch_cookies(conn),
-         {:ok, token} <- Map.fetch(conn.req_cookies, shared_link_cookie_name(shared_link.slug)),
+  def validate_shared_link_password(conn, shared_link) do
+    with {:ok, token} <- Map.fetch(conn.req_cookies, shared_link_cookie_name(shared_link.slug)),
          {:ok, %{slug: token_slug}} <- Plausible.Auth.Token.verify_shared_link(token),
          true <- token_slug == shared_link.slug do
-      render_shared_link(conn, shared_link)
+      {:ok, shared_link}
     else
-      _e ->
+      _e -> {:error, :unauthorized}
+    end
+  end
+
+  defp render_password_protected_shared_link(conn, shared_link) do
+    conn = Plug.Conn.fetch_cookies(conn)
+
+    # discard untrustworthy return_to given from query params
+    trimmed_query_string = conn.query_string |> omit_from_query_string("return_to")
+    star_path_fragment = serialize_star_path_as_query_string_fragment(conn)
+
+    # set valid return_to if star path is set
+    query_string =
+      [trimmed_query_string, star_path_fragment]
+      |> Enum.filter(fn v -> is_binary(v) and String.length(v) > 0 end)
+      |> Enum.join("&")
+
+    case validate_shared_link_password(conn, shared_link) do
+      {:ok, shared_link} ->
+        render_shared_link(conn, shared_link)
+
+      _ ->
         conn
         |> render("shared_link_password.html",
           link: shared_link,
-          query_string: conn.query_string,
+          query_string: query_string,
           dogfood_page_path: "/share/:dashboard"
         )
     end
@@ -320,14 +235,11 @@ defmodule PlausibleWeb.StatsController do
       )
 
     case Repo.one(link_query) do
-      %Plausible.Site.SharedLink{password_hash: hash} = link when not is_nil(hash) ->
-        {:password_protected, link}
-
       %Plausible.Site.SharedLink{} = link ->
-        {:unlisted, link}
+        {:ok, link}
 
       nil ->
-        :not_found
+        {:error, :not_found}
     end
   end
 
@@ -340,12 +252,29 @@ defmodule PlausibleWeb.StatsController do
       if Plausible.Auth.Password.match?(password, shared_link.password_hash) do
         token = Plausible.Auth.Token.sign_shared_link(slug)
 
+        star_path = parse_star_path(conn)
+
+        # The filter query params format used by the FE breaks when it passes through Phoenix / Plug.Conn decode/encode.
+        # This function works around that by using the original query string.
+        query_string_fragment =
+          get_rest_of_query_string(conn)
+          # omitted because return_to param was needed only for this function
+          |> omit_from_query_string("return_to")
+          # omitted because `auth: slug` query param is set definitively below
+          |> omit_from_query_string("auth")
+
         conn
         |> put_resp_cookie(shared_link_cookie_name(slug), token)
         |> redirect(
           to:
-            Routes.stats_path(conn, :shared_link, shared_link.site.domain, auth: slug) <>
-              qs_appendix(conn)
+            Routes.stats_path(
+              conn,
+              :shared_link,
+              shared_link.site.domain,
+              star_path,
+              auth: slug
+            ) <>
+              query_string_fragment
         )
       else
         conn
@@ -361,12 +290,44 @@ defmodule PlausibleWeb.StatsController do
     end
   end
 
-  def qs_appendix(conn)
-      when is_nil(conn.query_string) or
-             (is_binary(conn.query_string) and byte_size(conn.query_string)) == 0,
-      do: ""
+  defp serialize_star_path_as_query_string_fragment(conn) do
+    star_path = conn.path_params["path"]
 
-  def qs_appendix(conn), do: "&#{conn.query_string}"
+    if length(star_path) > 0 do
+      # make the path start with a /
+      # to be able to reject values that don't start with a /
+      %{"return_to" => "/#{Enum.join(star_path, "/")}"} |> URI.encode_query()
+    else
+      nil
+    end
+  end
+
+  defp parse_star_path(conn) do
+    case conn.query_params["return_to"] do
+      # omit prefix added in `serialize_star_path_as_query_string_fragment`
+      "/" <> return_to ->
+        return_to
+        |> String.split("/")
+        # disallow constructing links that navigate up
+        |> Enum.filter(fn part -> part !== ".." end)
+
+      _ ->
+        []
+    end
+  end
+
+  defp get_rest_of_query_string(conn) when conn.query_string in [nil, ""], do: ""
+
+  defp get_rest_of_query_string(conn), do: "&#{conn.query_string}"
+
+  defp omit_from_query_string(query_string, key) do
+    query_string
+    |> String.split("&")
+    |> Enum.reject(fn key_and_value ->
+      key_and_value == key || String.starts_with?(key_and_value, "#{key}=")
+    end)
+    |> Enum.join("&")
+  end
 
   defp render_shared_link(conn, shared_link) do
     shared_links_feature_access? =
@@ -396,12 +357,35 @@ defmodule PlausibleWeb.StatsController do
       not Teams.locked?(shared_link.site.team) ->
         current_user = conn.assigns[:current_user]
         site_role = get_fallback_site_role(conn)
-        shared_link = Plausible.Repo.preload(shared_link, site: :owners)
+        shared_link = Plausible.Repo.preload(shared_link, :segment, site: [:owners])
         stats_start_date = Plausible.Sites.stats_start_date(shared_link.site)
 
         flags = get_flags(current_user, shared_link.site)
 
-        {:ok, segments} = Plausible.Segments.get_all_for_site(shared_link.site, site_role)
+        {exploration_journey_end_event, exploration_max_journey_steps} =
+          on_ee(
+            do:
+              {Plausible.Stats.Exploration.Journey.Step.journey_end_event(),
+               Plausible.Stats.Exploration.max_steps()},
+            else: {"", 0}
+          )
+
+        limited_to_segment_id =
+          if Plausible.Site.SharedLink.limited_to_segment?(shared_link) do
+            shared_link.segment.id
+          else
+            nil
+          end
+
+        segments =
+          if is_nil(limited_to_segment_id) do
+            {:ok, segments} = Plausible.Segments.get_all_for_site(shared_link.site, site_role)
+            Enum.map(segments, &Plausible.Segments.to_response_map(&1, shared_link.site))
+          else
+            shared_link.segment
+            |> Plausible.Segments.to_response_map(shared_link.site)
+            |> List.wrap()
+          end
 
         embedded? = conn.params["embed"] == "true"
 
@@ -428,14 +412,17 @@ defmodule PlausibleWeb.StatsController do
           background: conn.params["background"],
           theme: conn.params["theme"],
           flags: flags,
-          is_dbip: is_dbip(),
+          dbip?: dbip?(),
           segments: segments,
           load_dashboard_js: true,
           hide_footer?: if(ce?(), do: embedded?, else: embedded? || site_role != :public),
           # no shared links for consolidated views
           consolidated_view?: false,
           consolidated_view_available?: false,
-          team_identifier: team_identifier
+          exploration_journey_end_event: exploration_journey_end_event,
+          exploration_max_journey_steps: exploration_max_journey_steps,
+          team_identifier: team_identifier,
+          limited_to_segment_id: limited_to_segment_id
         )
     end
   end
@@ -453,7 +440,7 @@ defmodule PlausibleWeb.StatsController do
       end)
       |> Map.new()
 
-  defp is_dbip() do
+  defp dbip?() do
     on_ee do
       false
     else

@@ -8,26 +8,24 @@ import {
   SomethingWentWrongMessage
 } from './error/something-went-wrong'
 import Dashboard from './index'
-import SourcesModal from './stats/modals/sources'
-import ReferrersDrilldownModal from './stats/modals/referrer-drilldown'
 import GoogleKeywordsModal from './stats/modals/google-keywords'
-import PagesModal from './stats/modals/pages'
-import EntryPagesModal from './stats/modals/entry-pages'
-import ExitPagesModal from './stats/modals/exit-pages'
-import LocationsModal from './stats/modals/locations-modal'
-import BrowsersModal from './stats/modals/devices/browsers-modal'
-import BrowserVersionsModal from './stats/modals/devices/browser-versions-modal'
-import OperatingSystemsModal from './stats/modals/devices/operating-systems-modal'
-import OperatingSystemVersionsModal from './stats/modals/devices/operating-system-versions-modal'
-import ScreenSizesModal from './stats/modals/devices/screen-sizes'
+import { PagesDetails } from './stats/pages/details'
+import { DevicesDetails } from './stats/devices/details'
+import {
+  BREAKDOWN_REPORTS,
+  BreakdownReportKey
+} from './stats/reports/reports-config'
+import { LocationsDetails } from './stats/locations/details'
 import PropsModal from './stats/modals/props'
 import ConversionsModal from './stats/modals/conversions'
 import FilterModal from './stats/modals/filter-modal'
-import QueryContextProvider from './query-context'
+import DashboardStateContextProvider from './dashboard-state-context'
 import { DashboardKeybinds } from './dashboard-keybinds'
 import LastLoadContextProvider from './last-load-context'
 import { RoutelessModalsContextProvider } from './navigation/routeless-modals-context'
 import { RoutelessSegmentModals } from './segments/routeless-segment-modals'
+import { GOOGLE_SEARCH_TERMS_DETAILS_PATH } from './stats/sources/fetch-search-terms'
+import { SourcesDetails } from './stats/sources/details'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -41,14 +39,14 @@ function DashboardElement() {
   return (
     <QueryClientProvider client={queryClient}>
       <RoutelessModalsContextProvider>
-        <QueryContextProvider>
+        <DashboardStateContextProvider>
           <LastLoadContextProvider>
             <Dashboard />
             {/** render any children of the root route below */}
           </LastLoadContextProvider>
           <Outlet />
           <RoutelessSegmentModals />
-        </QueryContextProvider>
+        </DashboardStateContextProvider>
       </RoutelessModalsContextProvider>
     </QueryClientProvider>
   )
@@ -60,98 +58,130 @@ export const rootRoute = {
 }
 
 export const sourcesRoute = {
-  path: 'sources',
-  element: <SourcesModal currentView="sources" />
+  path: BREAKDOWN_REPORTS.sources.detailsPath,
+  element: <SourcesDetails reportKey={BreakdownReportKey.sources} />
 }
 
 export const channelsRoute = {
-  path: 'channels',
-  element: <SourcesModal currentView="channels" />
+  path: BREAKDOWN_REPORTS.channels.detailsPath,
+  element: <SourcesDetails reportKey={BreakdownReportKey.channels} />
 }
 
 export const utmMediumsRoute = {
-  path: 'utm_mediums',
-  element: <SourcesModal currentView="utm_mediums" />
+  path: BREAKDOWN_REPORTS.utmMediums.detailsPath,
+  element: <SourcesDetails reportKey={BreakdownReportKey.utmMediums} />
 }
 
 export const utmSourcesRoute = {
-  path: 'utm_sources',
-  element: <SourcesModal currentView="utm_sources" />
+  path: BREAKDOWN_REPORTS.utmSources.detailsPath,
+  element: <SourcesDetails reportKey={BreakdownReportKey.utmSources} />
 }
 
 export const utmCampaignsRoute = {
-  path: 'utm_campaigns',
-  element: <SourcesModal currentView="utm_campaigns" />
+  path: BREAKDOWN_REPORTS.utmCampaigns.detailsPath,
+  element: <SourcesDetails reportKey={BreakdownReportKey.utmCampaigns} />
 }
 
 export const utmContentsRoute = {
-  path: 'utm_contents',
-  element: <SourcesModal currentView="utm_contents" />
+  path: BREAKDOWN_REPORTS.utmContents.detailsPath,
+  element: <SourcesDetails reportKey={BreakdownReportKey.utmContents} />
 }
 
 export const utmTermsRoute = {
-  path: 'utm_terms',
-  element: <SourcesModal currentView="utm_terms" />
+  path: BREAKDOWN_REPORTS.utmTerms.detailsPath,
+  element: <SourcesDetails reportKey={BreakdownReportKey.utmTerms} />
 }
 
 export const referrersGoogleRoute = {
-  path: 'referrers/Google',
+  path: GOOGLE_SEARCH_TERMS_DETAILS_PATH,
   element: <GoogleKeywordsModal />
 }
 
 export const topPagesRoute = {
-  path: 'pages',
-  element: <PagesModal />
+  path: BREAKDOWN_REPORTS.pages.detailsPath,
+  element: <PagesDetails breakdownReportKey={BreakdownReportKey.pages} />
+}
+
+export const topPagesWithHostnameRoute = {
+  path: BREAKDOWN_REPORTS.pagesWithHostname.detailsPath,
+  element: (
+    <PagesDetails breakdownReportKey={BreakdownReportKey.pagesWithHostname} />
+  )
 }
 
 export const entryPagesRoute = {
-  path: 'entry-pages',
-  element: <EntryPagesModal />
+  path: BREAKDOWN_REPORTS.entryPages.detailsPath,
+  element: <PagesDetails breakdownReportKey={BreakdownReportKey.entryPages} />
+}
+
+export const entryPagesWithHostnameRoute = {
+  path: BREAKDOWN_REPORTS.entryPagesWithHostname.detailsPath,
+  element: (
+    <PagesDetails
+      breakdownReportKey={BreakdownReportKey.entryPagesWithHostname}
+    />
+  )
 }
 
 export const exitPagesRoute = {
-  path: 'exit-pages',
-  element: <ExitPagesModal />
+  path: BREAKDOWN_REPORTS.exitPages.detailsPath,
+  element: <PagesDetails breakdownReportKey={BreakdownReportKey.exitPages} />
+}
+
+export const exitPagesWithHostnameRoute = {
+  path: BREAKDOWN_REPORTS.exitPagesWithHostname.detailsPath,
+  element: (
+    <PagesDetails
+      breakdownReportKey={BreakdownReportKey.exitPagesWithHostname}
+    />
+  )
 }
 
 export const countriesRoute = {
-  path: 'countries',
-  element: <LocationsModal currentView="countries" />
+  path: BREAKDOWN_REPORTS.countries.detailsPath,
+  element: <LocationsDetails reportKey={BreakdownReportKey.countries} />
 }
 
 export const regionsRoute = {
-  path: 'regions',
-  element: <LocationsModal currentView="regions" />
+  path: BREAKDOWN_REPORTS.regions.detailsPath,
+  element: <LocationsDetails reportKey={BreakdownReportKey.regions} />
 }
 
 export const citiesRoute = {
-  path: 'cities',
-  element: <LocationsModal currentView="cities" />
+  path: BREAKDOWN_REPORTS.cities.detailsPath,
+  element: <LocationsDetails reportKey={BreakdownReportKey.cities} />
 }
 
 export const browsersRoute = {
-  path: 'browsers',
-  element: <BrowsersModal />
+  path: BREAKDOWN_REPORTS.browsers.detailsPath,
+  element: <DevicesDetails reportKey={BreakdownReportKey.browsers} />
 }
 
 export const browserVersionsRoute = {
-  path: 'browser-versions',
-  element: <BrowserVersionsModal />
+  path: BREAKDOWN_REPORTS.browserVersions.detailsPath,
+  element: <DevicesDetails reportKey={BreakdownReportKey.browserVersions} />
 }
 
 export const operatingSystemsRoute = {
-  path: 'operating-systems',
-  element: <OperatingSystemsModal />
+  path: BREAKDOWN_REPORTS.operatingSystems.detailsPath,
+  element: <DevicesDetails reportKey={BreakdownReportKey.operatingSystems} />
 }
 
 export const operatingSystemVersionsRoute = {
-  path: 'operating-system-versions',
-  element: <OperatingSystemVersionsModal />
+  path: BREAKDOWN_REPORTS.operatingSystemVersions.detailsPath,
+  element: (
+    <DevicesDetails reportKey={BreakdownReportKey.operatingSystemVersions} />
+  )
 }
 
 export const screenSizesRoute = {
-  path: 'screen-sizes',
-  element: <ScreenSizesModal />
+  path: BREAKDOWN_REPORTS.screenSizes.detailsPath,
+  element: (
+    <DevicesDetails
+      reportKey={BreakdownReportKey.screenSizes}
+      searchEnabled={false}
+    />
+  )
 }
 
 export const conversionsRoute = {
@@ -160,8 +190,8 @@ export const conversionsRoute = {
 }
 
 export const referrersDrilldownRoute = {
-  path: 'referrers/:referrer',
-  element: <ReferrersDrilldownModal />
+  path: BREAKDOWN_REPORTS.referrers.detailsPath,
+  element: <SourcesDetails reportKey={BreakdownReportKey.referrers} />
 }
 
 export const customPropsRoute = {
@@ -213,8 +243,11 @@ export function createAppRouter(site: PlausibleSite) {
           referrersGoogleRoute,
           referrersDrilldownRoute,
           topPagesRoute,
+          topPagesWithHostnameRoute,
           entryPagesRoute,
+          entryPagesWithHostnameRoute,
           exitPagesRoute,
+          exitPagesWithHostnameRoute,
           countriesRoute,
           regionsRoute,
           citiesRoute,

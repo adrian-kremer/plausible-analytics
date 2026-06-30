@@ -2,6 +2,7 @@
   The modules below this comment block are resolved from '../deps' folder,
   which does not exist when running the lint command in Github CI
 */
+
 /* eslint-disable import/no-unresolved */
 import 'phoenix_html'
 import { Socket } from 'phoenix'
@@ -70,6 +71,7 @@ if (csrfToken && websocketUrl) {
   })
   window.addEventListener('phx:page-loading-start', (_info) => topbar.show())
   window.addEventListener('phx:page-loading-stop', (_info) => topbar.hide())
+  window.addEventListener('scroll-to-top', () => window.scrollTo(0, 0))
 
   liveSocket.connect()
   window.liveSocket = liveSocket

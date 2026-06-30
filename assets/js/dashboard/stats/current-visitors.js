@@ -1,41 +1,17 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React from 'react'
 import { AppNavigationLink } from '../navigation/use-app-navigate'
-import * as api from '../api'
 import { Tooltip } from '../util/tooltip'
 import { SecondsSinceLastLoad } from '../util/seconds-since-last-load'
-import { useQueryContext } from '../query-context'
-import { useSiteContext } from '../site-context'
 import { useLastLoadContext } from '../last-load-context'
+import { useCurrentVisitorsContext } from '../current-visitors-context'
 import classNames from 'classnames'
+import { popover } from '../components/popover'
 
-export default function CurrentVisitors({
-  className = '',
-  tooltipBoundaryRef
-}) {
-  const { query } = useQueryContext()
+export default function CurrentVisitors({ className = '' }) {
   const lastLoadTimestamp = useLastLoadContext()
-  const site = useSiteContext()
-  const [currentVisitors, setCurrentVisitors] = useState(null)
+  const currentVisitors = useCurrentVisitorsContext()
 
-  const updateCount = useCallback(() => {
-    api
-      .get(`/api/stats/${encodeURIComponent(site.domain)}/current-visitors`)
-      .then((res) => setCurrentVisitors(res))
-  }, [site.domain])
-
-  useEffect(() => {
-    document.addEventListener('tick', updateCount)
-
-    return () => {
-      document.removeEventListener('tick', updateCount)
-    }
-  }, [updateCount])
-
-  useEffect(() => {
-    updateCount()
-  }, [query, updateCount])
-
-  if (currentVisitors !== null && query.filters.length === 0) {
+  if (currentVisitors !== null) {
     return (
       <Tooltip
         info={
@@ -49,23 +25,24 @@ export default function CurrentVisitors({
             </p>
           </div>
         }
-        boundary={tooltipBoundaryRef.current}
       >
         <AppNavigationLink
           search={(prev) => ({ ...prev, period: 'realtime' })}
           className={classNames(
-            'h-9 flex items-center text-xs md:text-sm font-bold text-gray-500 dark:text-gray-300',
+            popover.toggleButton.classNames.rounded,
+            popover.toggleButton.classNames.ghost,
+            'px-2',
             className
           )}
         >
           <svg
-            className="inline-block w-2 mr-1 text-green-500 fill-current"
+            className="inline-block w-2 text-green-500 fill-current"
             viewBox="0 0 16 16"
             xmlns="http://www.w3.org/2000/svg"
           >
             <circle cx="8" cy="8" r="8" />
           </svg>
-          <div className="inline-block">
+          <div className="inline-block text-gray-500 dark:text-gray-400">
             {currentVisitors}
             <span className="hidden lg:inline">
               {' '}

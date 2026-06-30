@@ -7,8 +7,10 @@ defmodule PlausibleWeb.Components.Site.Feature.ToggleLive do
 
   def update(assigns, socket) do
     site = Plausible.Repo.preload(assigns.site, :team)
+    team = Plausible.Teams.with_subscription(site.team)
+    site = %{site | team: team}
     current_setting = assigns.feature_mod.enabled?(site)
-    disabled? = assigns.feature_mod.check_availability(site.team) !== :ok
+    disabled? = assigns.feature_mod.check_availability(team) !== :ok
 
     {:ok,
      socket
@@ -71,9 +73,9 @@ defmodule PlausibleWeb.Components.Site.Feature.ToggleLive do
 
         message =
           if new_setting do
-            "#{feature_mod.display_name()} are now visible again on your dashboard"
+            "#{feature_mod.toggle_display_name()} are now visible again on your dashboard"
           else
-            "#{feature_mod.display_name()} are now hidden from your dashboard"
+            "#{feature_mod.toggle_display_name()} are now hidden from your dashboard"
           end
 
         send(self(), {:feature_toggled, message, updated_site})
